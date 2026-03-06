@@ -187,16 +187,18 @@ async function bootstrap() {
   // --------------------------------------------------------
   // 3a. CORS (must be before any raw Express routes)
   // --------------------------------------------------------
-  const allowedOrigins = (process.env.ALLOWED_ORIGINS || 'http://localhost:4200')
-    .split(',')
-    .map(o => o.trim())
-    .filter((origin) => origin.length > 0);
+  // const allowedOrigins = (process.env.ALLOWED_ORIGINS || 'http://localhost:4200')
+  //   .split(',')
+  //   .map(o => o.trim())
+  //   .filter((origin) => origin.length > 0);
 
-  app.enableCors({
-    origin: allowedOrigins,
-    credentials: true,
-    allowedHeaders: ['Content-Type', 'Authorization', 'x-tenant-id', 'x-csrf-token'],
-  });
+  // app.enableCors({
+  //   origin: allowedOrigins,
+  //   credentials: true,
+  //   allowedHeaders: ['Content-Type', 'Authorization', 'x-tenant-id', 'x-csrf-token'],
+  // });
+  
+  // CORS DESHABILITADO TEMPORALMENTE PARA PRUEBAS
 
   // --------------------------------------------------------
   // 3b. CSRF PROTECTION (M-4: double-submit cookie)
