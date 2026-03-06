@@ -1,0 +1,117 @@
+import { Controller, Get, Post, Patch, Delete, Body, Param, UseGuards, Request, Query, ParseUUIDPipe } from '@nestjs/common';
+import { ApiTags, ApiCookieAuth, ApiOperation, ApiResponse, ApiQuery, ApiParam } from '@nestjs/swagger';
+import { ProductsService } from './products.service';
+import { AuthenticatedGuard } from '../../../common/guards/authenticated.guard';
+import { TenantAccessGuard } from '../../../common/guards/tenant-access.guard';
+import { HybridPermissionsGuard } from '../../../common/guards/hybrid-permissions.guard';
+import { Permission } from '../../../common/enums/business-roles.enum';
+import { RequirePermission } from '../../../common/decorators/require-permission.decorator';
+import { CreateProductDto } from './dto/create-product.dto';
+import { UpdateProductDto } from './dto/update-product.dto';
+import { MatrixQueryDto } from './dto/matrix-query.dto';
+import { MatrixResponseDto, GroupByOptionDto } from './dto/matrix-response.dto';
+import { ValidationResultDto } from './dto/validation-result.dto';
+
+@ApiTags('Products')
+@ApiCookieAuth()
+@Controller('products')
+@UseGuards(AuthenticatedGuard, TenantAccessGuard, HybridPermissionsGuard)
+export class ProductsController {
+  constructor(private readonly productsService: ProductsService) {}
+
+  @Post()
+  @RequirePermission(Permission.PRODUCT_WRITE)
+  @ApiOperation({ summary: 'Crear producto/proyecto' })
+  @ApiResponse({ status: 201, description: 'Producto creado exitosamente' })
+  @ApiResponse({ status: 400, description: 'Datos inválidos' })
+  @ApiResponse({ status: 401, description: 'No autenticado' })
+  @ApiResponse({ status: 403, description: 'No autorizado' })
+  create(@Body() dto: CreateProductDto, @Request() req) {
+    return this.productsService.create(dto, req.workspaceMember.id);
+  }
+
+  @Post('validate')
+  @RequirePermission(Permission.PRODUCT_WRITE)
+  @ApiOperation({ summary: 'Validar datos de producto sin crearlo (dry-run)' })
+  @ApiResponse({ status: 200, description: 'Resultado de la validación', type: ValidationResultDto })
+  @ApiResponse({ status: 401, description: 'No autenticado' })
+  @ApiResponse({ status: 403, description: 'No autorizado' })
+  async validateProduct(@Body() dto: CreateProductDto): Promise<ValidationResultDto> {
+    const result = await this.productsService.validate(dto);
+    return {
+      valid: result.valid,
+      errors: result.errors,
+      message: result.valid ? 'Validación exitosa' : 'Se encontraron errores de validación',
+    };
+  }
+
+  @Get()
+  @RequirePermission(Permission.PRODUCT_READ)
+  @ApiOperation({ summary: 'Listar productos' })
+  @ApiQuery({ name: 'page', required: false, type: Number, description: 'Número de página' })
+  @ApiQuery({ name: 'limit', required: false, type: Number, description: 'Elementos por página' })
+  @ApiQuery({ name: 'search', required: false, type: String, description: 'Buscar por nombre o descripción' })
+  @ApiResponse({ status: 200, description: 'Lista de productos' })
+  @ApiResponse({ status: 401, description: 'No autenticado' })
+  findAll(
+    @Query('page') page = 1,
+    @Query('limit') limit = 50,
+    @Query('search') search?: string,
+  ) {
+    return this.productsService.findAll(+page, +limit, search);
+  }
+
+  @Get(':id')
+  @RequirePermission(Permission.PRODUCT_READ)
+  @ApiOperation({ summary: 'Obtener producto por ID' })
+  @ApiParam({ name: 'id', type: String, description: 'UUID del producto' })
+  @ApiResponse({ status: 200, description: 'Producto encontrado' })
+  @ApiResponse({ status: 404, description: 'Producto no encontrado' })
+  findOne(@Param('id', ParseUUIDPipe) id: string) {
+    return this.productsService.findOne(id);
+  }
+
+  @Patch(':id')
+  @RequirePermission(Permission.PRODUCT_WRITE)
+  @ApiOperation({ summary: 'Actualizar producto' })
+  @ApiParam({ name: 'id', type: String, description: 'UUID del producto' })
+  @ApiResponse({ status: 200, description: 'Producto actualizado' })
+  @ApiResponse({ status: 400, description: 'Datos inválidos' })
+  @ApiResponse({ status: 404, description: 'Producto no encontrado' })
+  update(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: UpdateProductDto,
+    @Request() req,
+  ) {
+    return this.productsService.update(id, dto, req.workspaceMember.id);
+  }
+
+  @Delete(':id')
+  @RequirePermission(Permission.PRODUCT_WRITE)
+  @ApiOperation({ summary: 'Eliminar producto' })
+  @ApiParam({ name: 'id', type: String, description: 'UUID del producto' })
+  @ApiResponse({ status: 200, description: 'Producto eliminado' })
+  @ApiResponse({ status: 404, description: 'Producto no encontrado' })
+  remove(@Param('id', ParseUUIDPipe) id: string, @Request() req) {
+    return this.productsService.remove(id, req.workspaceMember.id);
+  }
+
+  // ── Matrix ────────────────────────────────────────────────────────────
+
+  @Get('matrix/group-by-options')
+  @RequirePermission(Permission.PRODUCT_READ)
+  @ApiOperation({ summary: 'Opciones disponibles para el dropdown Group By' })
+  @ApiResponse({ status: 200, description: 'Lista de opciones', type: [GroupByOptionDto] })
+  getGroupByOptions() {
+    return this.productsService.getGroupByOptions();
+  }
+
+  @Get('matrix')
+  @RequirePermission(Permission.PRODUCT_READ)
+  @ApiOperation({ summary: 'Product Matrix — vista bidimensional [Grupo × Indicadores]' })
+  @ApiResponse({ status: 200, description: 'Datos de la matrix', type: MatrixResponseDto })
+  @ApiResponse({ status: 400, description: 'groupBy inválido' })
+  getMatrix(@Query() dto: MatrixQueryDto) {
+    return this.productsService.buildMatrix(dto);
+  }
+}
