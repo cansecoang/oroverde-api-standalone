@@ -1,0 +1,20 @@
+node_modules
+dist
+coverage
+.git
+.vscode
+.idea
+
+# Environment files (use templates in repo)
+.env
+.env.*
+!.env.example
+!.env.production.azure.example
+
+# Logs
+logs
+*.log
+npm-debug.log*
+
+# Misc
+.DS_Store

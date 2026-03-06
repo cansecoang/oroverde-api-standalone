@@ -37,19 +37,28 @@ import { TenantMiddleware } from './common/middleware/tenant.middleware';
     TypeOrmModule.forRootAsync({
       imports: [ConfigModule],
       inject: [ConfigService],
-      useFactory: (config: ConfigService) => ({
-        name: 'default',
-        type: 'postgres',
-        host: config.get<string>('DB_HOST', 'localhost'),
-        port: config.get<number>('DB_PORT', 5432),
-        username: config.get<string>('DB_USER'),
-        password: config.get<string>('DB_PASS'),
-        database: config.get<string>('DB_NAME', 'control_plane'),
-        entities: [Tenant, GlobalUser, TenantMember, GlobalOrganization, GlobalCountry],
-        autoLoadEntities: false,
-        synchronize: config.get<string>('DB_SYNCHRONIZE', 'false') === 'true',
-        logging: config.get<string>('DB_LOGGING', 'false') === 'true',
-      }),
+      useFactory: (config: ConfigService) => {
+        const dbHost = config.get<string>('DB_HOST', 'localhost');
+        const dbSslEnabled = config.get<string>('DB_SSL', 'false') === 'true';
+
+        return {
+          name: 'default',
+          type: 'postgres',
+          host: dbHost,
+          port: config.get<number>('DB_PORT', 5432),
+          username: config.get<string>('DB_USER'),
+          password: config.get<string>('DB_PASS'),
+          database: config.get<string>('DB_NAME', 'control_plane'),
+          entities: [Tenant, GlobalUser, TenantMember, GlobalOrganization, GlobalCountry],
+          autoLoadEntities: false,
+          synchronize: config.get<string>('DB_SYNCHRONIZE', 'false') === 'true',
+          logging: config.get<string>('DB_LOGGING', 'false') === 'true',
+          // SSL para Azure o cuando se habilita explícitamente por variable de entorno.
+          ssl: dbSslEnabled || dbHost.includes('azure')
+            ? { rejectUnauthorized: false }
+            : false,
+        };
+      },
     }),
 
     MailerModule.forRootAsync({

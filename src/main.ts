@@ -11,6 +11,94 @@ import { createClient } from 'redis';
 import RedisStore from 'connect-redis';
 import { doubleCsrf } from 'csrf-csrf';
 
+type RedisClientConfig = NonNullable<Parameters<typeof createClient>[0]>;
+
+function buildRedisClientConfigFromSeparateEnv(): RedisClientConfig | null {
+  const host = (process.env.REDIS_HOST || '').trim();
+  const password = (process.env.REDIS_PASSWORD || '').trim();
+
+  if (!host || !password) {
+    return null;
+  }
+
+  const rawPort = (process.env.REDIS_PORT || '').trim();
+  const parsedPort = Number.parseInt(rawPort, 10);
+  const port = Number.isFinite(parsedPort) ? parsedPort : 6380;
+
+  const tlsRaw = (process.env.REDIS_TLS || '').trim().toLowerCase();
+  const tlsEnabled = tlsRaw
+    ? tlsRaw === 'true'
+    : port === 6380 ||
+      port === 10000 ||
+      host.endsWith('.redis.cache.windows.net') ||
+      host.endsWith('.redis.azure.net');
+
+  const username = (process.env.REDIS_USERNAME || '').trim() || 'default';
+
+  return {
+    socket: {
+      host,
+      port,
+      tls: tlsEnabled ? true : undefined,
+    },
+    username,
+    password,
+  };
+}
+
+function buildRedisClientConfig(rawValue: string): RedisClientConfig {
+  const value = rawValue.trim();
+
+  if (value.startsWith('redis://') || value.startsWith('rediss://')) {
+    return { url: value };
+  }
+
+  // Azure "Primary connection string" (StackExchange.Redis) format:
+  // host:6380,password=...,ssl=True,abortConnect=False
+  const [hostPortPart, ...optionParts] = value.split(',');
+  if (!hostPortPart || optionParts.length === 0) {
+    return { url: value };
+  }
+
+  const [rawHost, rawPort] = hostPortPart.trim().split(':');
+  const host = rawHost?.trim();
+  if (!host) {
+    return { url: value };
+  }
+
+  const options = new Map<string, string>();
+  for (const part of optionParts) {
+    const eqIndex = part.indexOf('=');
+    if (eqIndex === -1) continue;
+    const key = part.slice(0, eqIndex).trim().toLowerCase();
+    const optionValue = part.slice(eqIndex + 1).trim();
+    if (key) options.set(key, optionValue);
+  }
+
+  const password = options.get('password');
+  if (!password) {
+    return { url: value };
+  }
+
+  const sslEnabled = (options.get('ssl') || '').toLowerCase() === 'true';
+  const parsedPort = Number.parseInt((rawPort || '').trim(), 10);
+  const port = Number.isFinite(parsedPort) ? parsedPort : (sslEnabled ? 6380 : 6379);
+  
+  const usernameFromConn = options.get('user') || options.get('username');
+  const usernameFromEnv = (process.env.REDIS_USERNAME || '').trim();
+  const username = usernameFromConn || usernameFromEnv || 'default';
+
+  return {
+    socket: {
+      host,
+      port,
+      tls: sslEnabled ? true : undefined,
+    },
+    username,
+    password,
+  };
+}
+
 async function bootstrap() {
   const app = await NestFactory.create(AppModule);
   const globalPrefix = 'api';
@@ -34,20 +122,34 @@ async function bootstrap() {
   // --------------------------------------------------------
   // 2. CONFIGURACIÓN REDIS
   // --------------------------------------------------------
-  const redisUrl = process.env.REDIS_URL || 'redis://:R3dis_S3cure_P%40ss!@localhost:6379';
-  Logger.log(`🔌 Conectando a Redis...`, 'Bootstrap');
+  const redisConfigFromSeparateEnv = buildRedisClientConfigFromSeparateEnv();
+  const redisRaw = process.env.REDIS_URL || 'redis://:R3dis_S3cure_P%40ss!@localhost:6379';
+  const redisConfig = redisConfigFromSeparateEnv || buildRedisClientConfig(redisRaw);
+  const redisSource = redisConfigFromSeparateEnv ? 'variables separadas' : 'REDIS_URL';
+  Logger.log(`🔌 Conectando a Redis (${redisSource})...`, 'Bootstrap');
 
-  const redisClient = createClient({ url: redisUrl });
+  const redisClient = createClient(redisConfig);
+  let isRedisConnected = false;
   redisClient.on('error', (err) => Logger.error('❌ Error Redis:', err));
 
-  // Redis DEBE conectar; si falla, la app no arranca.
-  await redisClient.connect();
-  Logger.log('✅ Redis conectado', 'Bootstrap');
+  // Intenta conectar Redis con timeout de 10 segundos; si falla, continúa sin sesiones persistentes
+  try {
+    const connectPromise = redisClient.connect();
+    const timeoutPromise = new Promise((_, reject) => 
+      setTimeout(() => reject(new Error('Redis connection timeout')), 10000)
+    );
+    await Promise.race([connectPromise, timeoutPromise]);
+    isRedisConnected = true;
+    Logger.log('✅ Redis conectado', 'Bootstrap');
+  } catch (err: any) {
+    Logger.warn('⚠️ Redis no disponible (app continuará sin sesiones persistentes):', err.message);
+    isRedisConnected = false;
+  }
 
-  const redisStore = new RedisStore({
-    client: redisClient,
-    prefix: 'saas_sess:',
-  });
+  // Usa RedisStore si está disponible; si no, usa sesiones en memoria (no persistentes)
+  const redisStore = isRedisConnected 
+    ? new RedisStore({ client: redisClient, prefix: 'saas_sess:' })
+    : undefined;
 
   // --------------------------------------------------------
   // 2b. COOKIE PARSER (required by csrf-csrf to read req.cookies)
@@ -57,20 +159,27 @@ async function bootstrap() {
   // --------------------------------------------------------
   // 3. MIDDLEWARE DE SESIÓN
   // --------------------------------------------------------
-  app.use(
-    session({
-      store: redisStore,
-      secret: sessionSecret,
-      resave: false,
-      saveUninitialized: false,
-      cookie: {
-        maxAge: 1000 * 60 * 60 * 24, // 1 día
-        httpOnly: true,
-        secure: isProduction,
-        sameSite: 'lax',
-      },
-    })
-  );
+  const sessionConfig: any = {
+    secret: sessionSecret,
+    resave: false,
+    saveUninitialized: false,
+    cookie: {
+      maxAge: 1000 * 60 * 60 * 24, // 1 día
+      httpOnly: true,
+      secure: isProduction,
+      sameSite: 'lax',
+    },
+  };
+  
+  // Solo usa RedisStore si Redis está disponible
+  if (isRedisConnected) {
+    sessionConfig.store = new RedisStore({
+      client: redisClient,
+      prefix: 'saas_sess:',
+    });
+  }
+  
+  app.use(session(sessionConfig));
 
   app.use(passport.initialize());
   app.use(passport.session());
@@ -80,7 +189,8 @@ async function bootstrap() {
   // --------------------------------------------------------
   const allowedOrigins = (process.env.ALLOWED_ORIGINS || 'http://localhost:4200')
     .split(',')
-    .map(o => o.trim());
+    .map(o => o.trim())
+    .filter((origin) => origin.length > 0);
 
   app.enableCors({
     origin: allowedOrigins,
@@ -91,18 +201,38 @@ async function bootstrap() {
   // 3b. CSRF PROTECTION (M-4: double-submit cookie)
   // --------------------------------------------------------
   const csrfSecret = process.env.CSRF_SECRET || sessionSecret;
-  const { doubleCsrfProtection, generateCsrfToken } = doubleCsrf({
-    getSecret: () => csrfSecret,
-    getSessionIdentifier: (req) => (req as any).sessionID ?? '',
-    cookieName: '__csrf',
-    cookieOptions: {
-      httpOnly: true,
-      secure: isProduction,
-      sameSite: 'lax' as const,
-      path: '/',
-    },
-    getCsrfTokenFromRequest: (req) => req.headers['x-csrf-token'] as string,
-  });
+  let doubleCsrfProtection: any;
+  let generateCsrfToken: any;
+  
+  try {
+    const csrfConfig = doubleCsrf({
+      getSecret: () => csrfSecret,
+      getSessionIdentifier: (req) => {
+        const sessionID = (req as any).sessionID;
+        // Debe ser estable entre requests para no invalidar tokens CSRF.
+        return sessionID || 'anonymous-session';
+      },
+      cookieName: '__csrf',
+      cookieOptions: {
+        httpOnly: true,
+        secure: isProduction,
+        sameSite: 'lax' as const,
+        path: '/',
+      },
+      getCsrfTokenFromRequest: (req) => {
+        return (req.headers['x-csrf-token'] as string) || 
+               (req.body?.csrfToken as string) ||
+               (req.query?.csrfToken as string) ||
+               '';
+      },
+    });
+    doubleCsrfProtection = csrfConfig.doubleCsrfProtection;
+    generateCsrfToken = csrfConfig.generateCsrfToken;
+    Logger.log('✅ CSRF Protection inicializado correctamente', 'Bootstrap');
+  } catch (err: any) {
+    Logger.error('❌ Error configurando CSRF:', err.message);
+    throw err;
+  }
 
   // Aplicar protección CSRF a rutas que mutan estado (POST, PUT, PATCH, DELETE)
   // Excluir: login (necesita funcionar sin CSRF previo), webhook endpoints
@@ -153,7 +283,9 @@ async function bootstrap() {
   const cleanup = async () => {
     Logger.log('🛑 Cerrando conexiones...', 'Shutdown');
     await drainTenantPool();           // M-6: cerrar todas las conexiones de tenant
-    await redisClient.disconnect();    // cerrar Redis
+    if (isRedisConnected) {
+      await redisClient.disconnect();  // cerrar Redis solo si estaba conectado
+    }
   };
   process.on('SIGTERM', cleanup);
   process.on('SIGINT', cleanup);

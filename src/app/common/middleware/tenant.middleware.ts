@@ -18,6 +18,7 @@ export class TenantMiddleware implements NestMiddleware {
     const publicPrefixes = [
       '/api/auth',
       '/api/admin',
+      '/api/health',
       '/health',
       '/docs',
     ];

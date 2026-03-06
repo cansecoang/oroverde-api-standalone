@@ -60,12 +60,18 @@ export class AuthService {
 
   // 3. VALIDACIÓN...
   async validateUser(email: string, pass: string): Promise<any> {
-    const user = await this.usersService.findByEmail(email); 
-    if (user && await bcrypt.compare(pass, user.password_hash)) {
-      const { password_hash, ...result } = user;
-      return result;
+    const user = await this.usersService.findByEmail(email);
+    if (!user || !user.password_hash) {
+      return null;
     }
-    return null;
+
+    const isPasswordValid = await bcrypt.compare(pass, user.password_hash);
+    if (!isPasswordValid) {
+      return null;
+    }
+
+    const { password_hash, ...result } = user;
+    return result;
   }
 
   // Cambio de contraseña (obligatorio en primer login)

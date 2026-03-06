@@ -1,0 +1,99 @@
+services:
+  # ==========================================
+  # PostgreSQL - Base de datos de control plane
+  # ==========================================
+  postgres:
+    image: postgres:16-alpine
+    container_name: oroverde-postgres
+    environment:
+      POSTGRES_DB: ${DB_NAME:-control_plane}
+      POSTGRES_USER: ${DB_USER:-admin}
+      POSTGRES_PASSWORD: ${DB_PASS:-root}
+    ports:
+      - "${POSTGRES_LOCAL_PORT:-5432}:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USER:-admin}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - oroverde-network
+
+  # ==========================================
+  # Redis - Session Store
+  # ==========================================
+  redis:
+    image: redis:7-alpine
+    container_name: oroverde-redis
+    command: redis-server --requirepass ${REDIS_LOCAL_PASSWORD:-R3dis_S3cure_P@ss!}
+    ports:
+      - "${REDIS_LOCAL_PORT:-6379}:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD-SHELL", "redis-cli -a '${REDIS_LOCAL_PASSWORD:-R3dis_S3cure_P@ss!}' ping | grep -q PONG"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - oroverde-network
+
+  # ==========================================
+  # API NestJS
+  # ==========================================
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: oroverde-api
+    environment:
+      # Aplicación
+      NODE_ENV: development
+      PORT: 3000
+      APP_URL: http://localhost:4200
+      
+      # Base de datos
+      DB_HOST: postgres
+      DB_PORT: 5432
+      DB_USER: ${DB_USER:-admin}
+      DB_PASS: ${DB_PASS:-root}
+      DB_NAME: ${DB_NAME:-control_plane}
+      DB_LOGGING: "true"
+      DB_SYNCHRONIZE: "false"
+      
+      # Redis Local (no Azure)
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      REDIS_USERNAME: default
+      REDIS_PASSWORD: ${REDIS_LOCAL_PASSWORD:-R3dis_S3cure_P@ss!}
+      REDIS_TLS: "false"  # No TLS en local
+      
+      # Sesión y CSRF
+      SESSION_SECRET: ${SESSION_SECRET:-dev_session_secret_change_in_production}
+      CSRF_SECRET: ${CSRF_SECRET:-dev_csrf_secret_change_in_production}
+      
+      # CORS
+      ALLOWED_ORIGINS: http://localhost:4200,http://localhost:3000
+      
+    ports:
+      - "${API_LOCAL_PORT:-3000}:3000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - oroverde-network
+    restart: unless-stopped
+
+volumes:
+  postgres_data:
+    driver: local
+  redis_data:
+    driver: local
+
+networks:
+  oroverde-network:
+    driver: bridge

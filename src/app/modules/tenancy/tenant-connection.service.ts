@@ -92,15 +92,21 @@ export class TenantConnectionService {
 
     // 3. Crear DataSource y guardarlo en pool
     const dbSync = process.env.DB_SYNCHRONIZE === 'true';
+    const dbHost = process.env.DB_HOST || 'localhost';
+    const dbSslEnabled = (process.env.DB_SSL || 'false') === 'true';
     const connection = new DataSource({
       type: 'postgres',
-      host: process.env.DB_HOST || 'localhost',
+      host: dbHost,
       port: parseInt(process.env.DB_PORT || '5432', 10),
       username: process.env.DB_USER,
       password: process.env.DB_PASS,
       database: tenant.dbName,
       entities: TENANT_ENTITIES,
       synchronize: dbSync,
+      // SSL para Azure o cuando se habilita explícitamente por variable de entorno.
+      ssl: dbSslEnabled || dbHost.includes('azure')
+        ? { rejectUnauthorized: false } 
+        : false,
     });
 
     await connection.initialize();
