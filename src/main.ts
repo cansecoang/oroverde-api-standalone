@@ -187,18 +187,16 @@ async function bootstrap() {
   // --------------------------------------------------------
   // 3a. CORS (must be before any raw Express routes)
   // --------------------------------------------------------
-  // const allowedOrigins = (process.env.ALLOWED_ORIGINS || 'http://localhost:4200')
-  //   .split(',')
-  //   .map(o => o.trim())
-  //   .filter((origin) => origin.length > 0);
+  const allowedOrigins = (process.env.ALLOWED_ORIGINS || 'http://localhost:4200')
+    .split(',')
+    .map(o => o.trim())
+    .filter((origin) => origin.length > 0);
 
-  // app.enableCors({
-  //   origin: allowedOrigins,
-  //   credentials: true,
-  //   allowedHeaders: ['Content-Type', 'Authorization', 'x-tenant-id', 'x-csrf-token'],
-  // });
-  
-  // CORS DESHABILITADO TEMPORALMENTE PARA PRUEBAS
+  app.enableCors({
+    origin: allowedOrigins,
+    credentials: true,
+    allowedHeaders: ['Content-Type', 'Authorization', 'x-tenant-id', 'x-csrf-token'],
+  });
 
   // --------------------------------------------------------
   // 3b. CSRF PROTECTION (M-4: double-submit cookie)
@@ -218,8 +216,8 @@ async function bootstrap() {
       cookieName: '__csrf',
       cookieOptions: {
         httpOnly: true,
-        secure: isProduction,
-        sameSite: 'lax' as const,
+        secure: true, // Obligatorio para que funcione 'none'
+        sameSite: 'none' as const, // ✅ Permite Cross-Origin
         path: '/',
       },
       getCsrfTokenFromRequest: (req) => {
@@ -350,9 +348,12 @@ async function bootstrap() {
   });
 
   const port = process.env.PORT || 3000;
-  await app.listen(port);
-  Logger.log(`🚀 Application is running on: http://localhost:${port}/${globalPrefix}`);
+  await app.listen(port, '0.0.0.0');
+  Logger.log(`🚀 Application is running on: http://0.0.0.0:${port}/${globalPrefix}`);
   Logger.log(`📖 Swagger docs: http://localhost:${port}/docs`);
 }
 
-bootstrap();
+bootstrap().catch((err) => {
+  Logger.error('💀 Bootstrap failed:', err);
+  process.exit(1);
+});

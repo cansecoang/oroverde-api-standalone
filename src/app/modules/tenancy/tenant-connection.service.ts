@@ -107,6 +107,12 @@ export class TenantConnectionService {
       ssl: dbSslEnabled || dbHost.includes('azure')
         ? { rejectUnauthorized: false } 
         : false,
+      // Timeout: evita cuelgues si la BD del tenant no responde.
+      connectTimeoutMS: 10000,
+      extra: {
+        connectionTimeoutMillis: 10000,
+        query_timeout: 30000,
+      },
     });
 
     await connection.initialize();

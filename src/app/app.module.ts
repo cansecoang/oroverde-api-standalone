@@ -57,6 +57,13 @@ import { TenantMiddleware } from './common/middleware/tenant.middleware';
           ssl: dbSslEnabled || dbHost.includes('azure')
             ? { rejectUnauthorized: false }
             : false,
+          // Timeout de conexión: evita que el arranque se cuelgue si PostgreSQL
+          // no responde (firewall, DNS, etc.). Sin esto el driver pg espera ∞.
+          connectTimeoutMS: 10000,
+          extra: {
+            connectionTimeoutMillis: 10000,
+            query_timeout: 30000,
+          },
         };
       },
     }),
