@@ -13,6 +13,26 @@ import { doubleCsrf } from 'csrf-csrf';
 
 type RedisClientConfig = NonNullable<Parameters<typeof createClient>[0]>;
 
+function parseBooleanEnv(value: string | undefined, defaultValue: boolean): boolean {
+  if (typeof value !== 'string') return defaultValue;
+  const normalized = value.trim().toLowerCase();
+  if (normalized === 'true') return true;
+  if (normalized === 'false') return false;
+  return defaultValue;
+}
+
+function parseSameSiteEnv(
+  value: string | undefined,
+  defaultValue: 'lax' | 'strict' | 'none',
+): 'lax' | 'strict' | 'none' {
+  if (!value) return defaultValue;
+  const normalized = value.trim().toLowerCase();
+  if (normalized === 'lax' || normalized === 'strict' || normalized === 'none') {
+    return normalized;
+  }
+  return defaultValue;
+}
+
 function buildRedisClientConfigFromSeparateEnv(): RedisClientConfig | null {
   const host = (process.env.REDIS_HOST || '').trim();
   const password = (process.env.REDIS_PASSWORD || '').trim();
@@ -101,6 +121,14 @@ function buildRedisClientConfig(rawValue: string): RedisClientConfig {
 
 async function bootstrap() {
   const app = await NestFactory.create(AppModule);
+  // --------------------------------------------------------
+  // 1. TRUST PROXY (¡La solución al balanceador de Azure!)
+  // --------------------------------------------------------
+  // Esto le dice a express-session que la conexión HTTPS fue manejada por Azure
+  const httpAdapter = app.getHttpAdapter();
+  if (httpAdapter.getType() === 'express') {
+    httpAdapter.getInstance().set('trust proxy', 1);
+  }
   const globalPrefix = 'api';
   app.setGlobalPrefix(globalPrefix);
 
@@ -113,6 +141,21 @@ async function bootstrap() {
   }
 
   const isProduction = process.env.NODE_ENV === 'production';
+  const corsEnabled = parseBooleanEnv(process.env.CORS_ENABLED, true);
+  const cookieSecure = parseBooleanEnv(process.env.COOKIE_SECURE, isProduction);
+  let cookieSameSite = parseSameSiteEnv(
+    process.env.COOKIE_SAMESITE,
+    cookieSecure ? 'none' : 'lax',
+  );
+
+  // El navegador rechaza SameSite=None si Secure=false.
+  if (!cookieSecure && cookieSameSite === 'none') {
+    Logger.warn(
+      'COOKIE_SAMESITE=none requiere COOKIE_SECURE=true. Se aplicará SameSite=lax.',
+      'Bootstrap',
+    );
+    cookieSameSite = 'lax';
+  }
 
   // --------------------------------------------------------
   // 1. SECURITY HEADERS (Helmet)
@@ -166,8 +209,8 @@ async function bootstrap() {
     cookie: {
       maxAge: 1000 * 60 * 60 * 24, // 1 día
       httpOnly: true,
-      secure: isProduction,
-      sameSite: 'lax',
+      secure: cookieSecure,
+      sameSite: cookieSameSite,
     },
   };
   
@@ -187,16 +230,22 @@ async function bootstrap() {
   // --------------------------------------------------------
   // 3a. CORS (must be before any raw Express routes)
   // --------------------------------------------------------
-  const allowedOrigins = (process.env.ALLOWED_ORIGINS || 'http://localhost:4200')
-    .split(',')
-    .map(o => o.trim())
-    .filter((origin) => origin.length > 0);
+  if (corsEnabled) {
+    const allowedOrigins = (process.env.ALLOWED_ORIGINS || 'http://localhost:4200')
+      .split(',')
+      .map(o => o.trim())
+      .filter((origin) => origin.length > 0);
 
-  app.enableCors({
-    origin: allowedOrigins,
-    credentials: true,
-    allowedHeaders: ['Content-Type', 'Authorization', 'x-tenant-id', 'x-csrf-token'],
-  });
+    app.enableCors({
+      origin: allowedOrigins,
+      credentials: true,
+      methods: 'GET,HEAD,PUT,PATCH,POST,DELETE,OPTIONS',
+      allowedHeaders: ['Content-Type', 'Authorization', 'x-tenant-id', 'x-csrf-token'],
+    });
+    Logger.log(`🌐 CORS habilitado para: ${allowedOrigins.join(', ')}`, 'Bootstrap');
+  } else {
+    Logger.warn('🚫 CORS deshabilitado (CORS_ENABLED=false)', 'Bootstrap');
+  }
 
   // --------------------------------------------------------
   // 3b. CSRF PROTECTION (M-4: double-submit cookie)
@@ -216,8 +265,8 @@ async function bootstrap() {
       cookieName: '__csrf',
       cookieOptions: {
         httpOnly: true,
-        secure: true, // Obligatorio para que funcione 'none'
-        sameSite: 'none' as const, // ✅ Permite Cross-Origin
+        secure: cookieSecure,
+        sameSite: cookieSameSite,
         path: '/',
       },
       getCsrfTokenFromRequest: (req) => {

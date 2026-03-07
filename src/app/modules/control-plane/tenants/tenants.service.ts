@@ -96,15 +96,27 @@ export class TenantsService {
     // ---------------------------------------------------------
     
     // Conexión temporal a la nueva BD
+    const dbHost = process.env.DB_HOST || 'localhost';
+    const dbSslEnabled = (process.env.DB_SSL || 'false') === 'true';
+
     const tenantDataSource = new DataSource({
       type: 'postgres',
-      host: process.env.DB_HOST || 'localhost',
+      host: dbHost,
       port: parseInt(process.env.DB_PORT || '5432', 10),
       username: process.env.DB_USER,
       password: process.env.DB_PASS,
       database: dbName,
       entities: [...APP_PLANE_ENTITIES],
-      synchronize: true // Necesario para crear tablas en BD nueva
+      synchronize: true, // Necesario para crear tablas en BD nueva
+      // Azure PostgreSQL exige TLS; sin ssl aparece "no pg_hba.conf entry ... no encryption".
+      ssl: dbSslEnabled || dbHost.includes('azure')
+        ? { rejectUnauthorized: false }
+        : false,
+      connectTimeoutMS: 10000,
+      extra: {
+        connectionTimeoutMillis: 10000,
+        query_timeout: 30000,
+      },
     });
 
     try {
@@ -216,15 +228,26 @@ export class TenantsService {
     if (!globalOrg) throw new BadRequestException('No se encontró la organización del usuario');
 
     // 5. Conectar a la BD del tenant
+    const dbHost = process.env.DB_HOST || 'localhost';
+    const dbSslEnabled = (process.env.DB_SSL || 'false') === 'true';
+
     const tenantDataSource = new DataSource({
       type: 'postgres',
-      host: process.env.DB_HOST || 'localhost',
+      host: dbHost,
       port: parseInt(process.env.DB_PORT || '5432', 10),
       username: process.env.DB_USER,
       password: process.env.DB_PASS,
       database: tenant.dbName,
       entities: [...APP_PLANE_ENTITIES],
       synchronize: false,
+      ssl: dbSslEnabled || dbHost.includes('azure')
+        ? { rejectUnauthorized: false }
+        : false,
+      connectTimeoutMS: 10000,
+      extra: {
+        connectionTimeoutMillis: 10000,
+        query_timeout: 30000,
+      },
     });
 
     try {
