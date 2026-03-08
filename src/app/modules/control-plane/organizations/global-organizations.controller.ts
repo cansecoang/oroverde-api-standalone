@@ -1,7 +1,8 @@
-import { Controller, Get, Post, Body, Patch, Param, Delete, Query, UseGuards } from '@nestjs/common';
+import { Controller, Get, Post, Body, Put, Param, Delete, Query, UseGuards } from '@nestjs/common';
 import { ApiTags, ApiCookieAuth, ApiOperation, ApiResponse, ApiQuery, ApiParam } from '@nestjs/swagger';
 import { GlobalOrganizationsService } from './global-organizations.service';
 import { CreateGlobalOrganizationDto } from './dto/create-global-organization.dto';
+import { UpdateGlobalOrganizationDto } from './dto/update-global-organization.dto';
 import { AuthenticatedGuard } from '../../../common/guards/authenticated.guard';
 import { RolesGuard } from '../../../common/guards/roles.guard';
 import { Roles } from '../../../common/decorators/roles.decorator';
@@ -52,23 +53,29 @@ export class GlobalOrganizationsController {
     return this.service.findOne(id);
   }
 
-  @Patch(':id')
-  @ApiOperation({ summary: 'Actualizar organización' })
+  @Put(':id')
+  @ApiOperation({ summary: 'Actualizar organización (reemplazar parcialmente)' })
   @ApiParam({ name: 'id', type: String, description: 'UUID de la organización' })
   @ApiResponse({ status: 200, description: 'Organización actualizada' })
-  @ApiResponse({ status: 400, description: 'Datos inválidos' })
+  @ApiResponse({ status: 400, description: 'Datos inválidos o colisión de name/tax_id' })
   @ApiResponse({ status: 401, description: 'No autenticado' })
+  @ApiResponse({ status: 403, description: 'No autorizado' })
   @ApiResponse({ status: 404, description: 'Organización no encontrada' })
-  update(@Param('id') id: string, @Body() updateDto: Partial<CreateGlobalOrganizationDto>) {
+  update(@Param('id') id: string, @Body() updateDto: UpdateGlobalOrganizationDto) {
     return this.service.update(id, updateDto);
   }
 
   @Delete(':id')
-  @ApiOperation({ summary: 'Eliminar organización' })
+  @ApiOperation({ summary: 'Eliminar organización (solo sin usuarios asociados)' })
   @ApiParam({ name: 'id', type: String, description: 'UUID de la organización' })
   @ApiResponse({ status: 200, description: 'Organización eliminada' })
   @ApiResponse({ status: 401, description: 'No autenticado' })
+  @ApiResponse({ status: 403, description: 'No autorizado' })
   @ApiResponse({ status: 404, description: 'Organización no encontrada' })
+  @ApiResponse({
+    status: 409,
+    description: 'Conflicto: Organización tiene usuarios asociados',
+  })
   remove(@Param('id') id: string) {
     return this.service.remove(id);
   }

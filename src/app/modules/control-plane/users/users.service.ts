@@ -1,10 +1,18 @@
-import { BadRequestException, Injectable, InternalServerErrorException, Logger } from '@nestjs/common';
+import { BadRequestException, ConflictException, Injectable, InternalServerErrorException, Logger, NotFoundException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { GlobalUser } from './entities/user.entity';
-import { MailerService } from '@nestjs-modules/mailer'; // 👈 1. IMPORTAR
-import * as bcrypt from 'bcrypt'; // 👈 2. IMPORTAR PARA HASH REAL
-import * as crypto from 'crypto'; // 👈 3. IMPORTAR PARA GENERAR PASS
+import { GlobalOrganization } from '../organizations/entities/global-organization.entity';
+import { TenantMember } from '../tenants/entities/tenant-member.entity';
+import { UpdateUserDto } from './dto/update-user.dto';
+import { UpdateUserStatusDto } from './dto/update-user-status.dto';
+import { UpdateUserRoleDto } from './dto/update-user-role.dto';
+import { GlobalRole } from '../../../common/enums/global-roles.enum';
+import { SessionService } from '../../../common/services/session.service';
+import { EventEmitter2 } from '@nestjs/event-emitter';
+import { MailerService } from '@nestjs-modules/mailer';
+import * as bcrypt from 'bcrypt';
+import * as crypto from 'crypto';
 
 @Injectable()
 export class GlobalUsersService {
@@ -13,7 +21,13 @@ export class GlobalUsersService {
   constructor(
     @InjectRepository(GlobalUser, 'default')
     private repo: Repository<GlobalUser>,
-    private readonly mailerService: MailerService // 👈 4. INYECTAR SERVICIO
+    @InjectRepository(GlobalOrganization, 'default')
+    private readonly orgRepo: Repository<GlobalOrganization>,
+    @InjectRepository(TenantMember, 'default')
+    private readonly tenantMemberRepo: Repository<TenantMember>,
+    private readonly mailerService: MailerService,
+    private readonly sessionService: SessionService,
+    private readonly eventEmitter: EventEmitter2,
   ) {}
 
   // Ruta ÚNICA de creación de usuarios (H-2: consolidado desde AuthService + GlobalUsersService)
@@ -104,5 +118,126 @@ export class GlobalUsersService {
   }
 
   async findById(id: string) {
-     return this.repo.findOne({ where: { id } }); }
+    return this.repo.findOne({ where: { id } });
+  }
+
+  // ─── MÓDULO 2: MUTACIONES ─────────────────────────────
+
+  async update(id: string, changes: UpdateUserDto) {
+    const user = await this.repo.findOne({ where: { id } });
+    if (!user) throw new NotFoundException('Usuario no encontrado');
+
+    // Validar que la organización destino exista
+    if (changes.organization_id) {
+      const org = await this.orgRepo.findOne({ where: { id: changes.organization_id } });
+      if (!org) {
+        throw new BadRequestException('La organización especificada no existe.');
+      }
+    }
+
+    const mergeData: Record<string, any> = {};
+    if (changes.first_name !== undefined) mergeData.firstName = changes.first_name;
+    if (changes.last_name !== undefined) mergeData.lastName = changes.last_name;
+    if (changes.organization_id !== undefined) mergeData.organizationId = changes.organization_id;
+
+    this.repo.merge(user, mergeData);
+    const saved = await this.repo.save(user);
+
+    this.eventEmitter.emit('user.updated', {
+      id: saved.id,
+      email: saved.email,
+      firstName: saved.firstName,
+      lastName: saved.lastName,
+    });
+    this.logger.log(`Evento 'user.updated' emitido para ${saved.id}`);
+
+    return saved;
+  }
+
+  async updateStatus(id: string, dto: UpdateUserStatusDto) {
+    const user = await this.repo.findOne({ where: { id } });
+    if (!user) throw new NotFoundException('Usuario no encontrado');
+
+    user.isActive = dto.isActive;
+    await this.repo.save(user);
+
+    let sessionsPurged = 0;
+    if (!dto.isActive) {
+      sessionsPurged = await this.sessionService.purgeUserSessions(id);
+    }
+
+    return {
+      message: dto.isActive
+        ? `Usuario '${user.email}' activado exitosamente.`
+        : `Usuario '${user.email}' desactivado. ${sessionsPurged} sesión(es) purgada(s).`,
+      isActive: dto.isActive,
+      ...(dto.isActive ? {} : { sessionsPurged }),
+    };
+  }
+
+  async remove(id: string) {
+    const user = await this.repo.findOne({ where: { id } });
+    if (!user) throw new NotFoundException('Usuario no encontrado');
+
+    // 1. No permitir eliminar usuarios activos — fuerza desactivación primero
+    if (user.isActive) {
+      throw new ConflictException(
+        'No se puede eliminar un usuario activo. Desactívelo primero (PATCH /status).',
+      );
+    }
+
+    // 2. Verificar membresías en workspaces (tenant_members)
+    const tenantCount = await this.tenantMemberRepo.count({ where: { userId: id } });
+    if (tenantCount > 0) {
+      throw new ConflictException(
+        `No se puede eliminar el usuario porque pertenece a ${tenantCount} workspace(s). Retírelo de todos los workspaces primero.`,
+      );
+    }
+
+    await this.repo.delete(id);
+    return {
+      message: `Usuario '${user.email}' eliminado exitosamente.`,
+      deletedId: id,
+    };
+  }
+
+  async updateRole(id: string, dto: UpdateUserRoleDto, requesterId: string) {
+    const user = await this.repo.findOne({ where: { id } });
+    if (!user) throw new NotFoundException('Usuario no encontrado');
+
+    if (id === requesterId) {
+      throw new BadRequestException('No puede cambiar su propio rol.');
+    }
+
+    // Proteger que siempre quede al menos 1 SUPER_ADMIN en el sistema
+    if (user.globalRole === GlobalRole.SUPER_ADMIN && dto.globalRole !== GlobalRole.SUPER_ADMIN) {
+      const adminCount = await this.repo.count({ where: { globalRole: GlobalRole.SUPER_ADMIN } });
+      if (adminCount <= 1) {
+        throw new BadRequestException(
+          'No se puede degradar al único Super Admin del sistema. Promueva otro usuario primero.',
+        );
+      }
+    }
+
+    const previousRole = user.globalRole;
+    user.globalRole = dto.globalRole;
+    const saved = await this.repo.save(user);
+
+    // Purgar sesiones si se degrada de super_admin → user para forzar re-login
+    let sessionsPurged = 0;
+    if (previousRole === GlobalRole.SUPER_ADMIN && dto.globalRole !== GlobalRole.SUPER_ADMIN) {
+      sessionsPurged = await this.sessionService.purgeUserSessions(id);
+    }
+
+    this.logger.log(`Rol de '${user.email}' cambiado: ${previousRole} → ${dto.globalRole}`);
+
+    return {
+      message: `Rol de '${saved.email}' actualizado de '${previousRole}' a '${dto.globalRole}'.`,
+      id: saved.id,
+      email: saved.email,
+      previousRole,
+      currentRole: saved.globalRole,
+      ...(sessionsPurged > 0 ? { sessionsPurged } : {}),
+    };
+  }
 }

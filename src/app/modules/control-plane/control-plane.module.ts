@@ -13,6 +13,8 @@ import { GlobalUsersService } from './users/users.service';
 import { GlobalOrganizationsService } from './organizations/global-organizations.service';
 import { TenantsService } from './tenants/tenants.service';
 import { CountriesService } from './countries/countries.service';
+import { SessionService } from '../../common/services/session.service';
+import { TenantSyncListener } from './tenant-sync.listener';
 
 // --- SEED: Catálogos por defecto al crear tenant ---
 import { TENANT_SEED_CALLBACK } from '../../common/tokens/tenant-init.token';
@@ -44,6 +46,8 @@ import { CountriesController } from './countries/countries.controller';
     GlobalOrganizationsService,
     TenantsService,
     CountriesService,
+    SessionService,
+    TenantSyncListener,
     // IoC: seed de catálogos TASK_STATUS + TASK_PHASES al crear tenant
     { provide: TENANT_SEED_CALLBACK, useValue: seedDefaultCatalogs },
   ],
