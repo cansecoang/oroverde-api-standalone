@@ -4,6 +4,8 @@ export class MatrixIndicatorDto {
   @ApiProperty() id: string;
   @ApiProperty() code: string;
   @ApiProperty() description: string;
+  @ApiPropertyOptional() unit: string | null;
+  @ApiPropertyOptional() totalTarget: number | null;
   @ApiProperty() outputId: string;
   @ApiProperty() outputCode: string;
   @ApiProperty() outputName: string;
@@ -15,6 +17,9 @@ export class MatrixGroupDto {
 
   @ApiProperty({ description: 'Nombre visible en el eje Y' })
   name: string;
+
+  @ApiProperty({ description: 'Cantidad de productos únicos en este grupo' })
+  productCount: number;
 }
 
 export class MatrixProductDto {
@@ -25,6 +30,8 @@ export class MatrixProductDto {
   @ApiPropertyOptional() deliverable: string | null;
   @ApiPropertyOptional({ description: 'committed_target del ProductStrategy para este indicador' })
   committedTarget: number | null;
+  @ApiPropertyOptional({ description: 'Unidad del indicador (e.g. hectáreas, personas)' })
+  unit: string | null;
 }
 
 export class MatrixCellDto {
@@ -64,4 +71,24 @@ export class MatrixResponseDto {
 
   @ApiProperty({ description: 'Conteo total de productos únicos' })
   totalProducts: number;
+}
+
+export class CatalogFilterItemDto {
+  @ApiProperty() id: string;
+  @ApiProperty() name: string;
+  @ApiPropertyOptional() code: string | null;
+}
+
+export class CatalogFilterOptionDto {
+  @ApiProperty({ description: 'Clave del campo en attributes JSONB' })
+  key: string;
+
+  @ApiProperty({ description: 'Etiqueta visible' })
+  label: string;
+
+  @ApiProperty({ description: 'Código del catálogo vinculado' })
+  catalogCode: string;
+
+  @ApiProperty({ type: [CatalogFilterItemDto], description: 'Ítems disponibles para filtrar' })
+  items: CatalogFilterItemDto[];
 }

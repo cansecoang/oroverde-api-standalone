@@ -21,12 +21,44 @@ import {
   MatrixProductDto,
   MatrixCellDto,
   GroupByOptionDto,
+  CatalogFilterOptionDto,
 } from './dto/matrix-response.dto';
 import {
   resolveGroupByStrategy,
   getBaseStrategyKeys,
   getBaseStrategyLabel,
 } from './matrix/group-by.strategy';
+
+function compareHierarchicalCode(a: string, b: string): number {
+  const aParts = a.split('.');
+  const bParts = b.split('.');
+  const maxLen = Math.max(aParts.length, bParts.length);
+
+  for (let i = 0; i < maxLen; i++) {
+    const aSeg = aParts[i];
+    const bSeg = bParts[i];
+
+    if (aSeg === undefined) return -1;
+    if (bSeg === undefined) return 1;
+
+    const aIsInt = /^\d+$/.test(aSeg);
+    const bIsInt = /^\d+$/.test(bSeg);
+
+    if (aIsInt && bIsInt) {
+      const diff = Number(aSeg) - Number(bSeg);
+      if (diff !== 0) return diff;
+      continue;
+    }
+
+    const lex = aSeg.localeCompare(bSeg, undefined, {
+      numeric: true,
+      sensitivity: 'base',
+    });
+    if (lex !== 0) return lex;
+  }
+
+  return 0;
+}
 
 @Injectable({ scope: Scope.REQUEST })
 export class ProductsService {
@@ -664,6 +696,26 @@ export class ProductsService {
       whereFragments.push(`p.country_id = $${paramIdx++}`);
       params.push(dto.countryId);
     }
+    if (dto.search) {
+      whereFragments.push(`p.name ILIKE $${paramIdx++}`);
+      params.push(`%${dto.search}%`);
+    }
+
+    // Filtros de catálogo (campos custom CATALOG_REF)
+    if (dto.catalogFilters) {
+      try {
+        const filters: Record<string, string[]> = JSON.parse(dto.catalogFilters);
+        for (const [fieldKey, itemIds] of Object.entries(filters)) {
+          if (!Array.isArray(itemIds) || itemIds.length === 0) continue;
+          if (!/^[a-zA-Z_][a-zA-Z0-9_]*$/.test(fieldKey)) continue;
+          const def = defMap.get(fieldKey);
+          if (!def || def.type !== 'CATALOG_REF') continue;
+          const placeholders = itemIds.map(() => `$${paramIdx++}`).join(', ');
+          whereFragments.push(`(p.attributes->>'${fieldKey}')::uuid IN (${placeholders})`);
+          params.push(...itemIds);
+        }
+      } catch { /* malformed JSON — ignore */ }
+    }
 
     const whereClause =
       whereFragments.length > 0 ? 'WHERE ' + whereFragments.join(' AND ') : '';
@@ -687,11 +739,14 @@ export class ProductsService {
       id: string;
       code: string;
       description: string;
+      unit: string | null;
+      total_target: number | null;
       output_id: string;
       output_code: string;
       output_name: string;
     }> = await dataSource.query(
-      `SELECT si.id, si.code, si.description, si.output_id,
+      `SELECT si.id, si.code, si.description, si.unit, si.total_target,
+              si.output_id,
               so.code AS output_code, so.name AS output_name
        FROM strategic_indicators si
        JOIN strategic_outputs so ON si.output_id = so.id
@@ -719,6 +774,7 @@ export class ProductsService {
              ${strategy.selectGroup},
              ps.indicator_id,
              ps.committed_target,
+             si.unit AS indicator_unit,
              wo_ctx.name AS owner_org_name
       FROM products p
       ${strategy.joinClause}
@@ -739,6 +795,7 @@ export class ProductsService {
       group_name: string;
       indicator_id: string;
       committed_target: number | null;
+      indicator_unit: string | null;
       owner_org_name: string | null;
     }> = await dataSource.query(productQuery, params);
 
@@ -754,17 +811,41 @@ export class ProductsService {
         id: ind.id,
         code: ind.code,
         description: ind.description,
+        unit: ind.unit,
+        totalTarget: ind.total_target ? Number(ind.total_target) : null,
         outputId: ind.output_id,
         outputCode: ind.output_code,
         outputName: ind.output_name,
       }));
 
-    // Grupos únicos (preservar orden de aparición)
+    // Mantener el orden de outputs y ordenar metas por código jerárquico natural.
+    const outputOrderRank = new Map<string, number>();
+    for (const ind of indicatorsRaw) {
+      if (!outputOrderRank.has(ind.output_id)) {
+        outputOrderRank.set(ind.output_id, outputOrderRank.size);
+      }
+    }
+
+    indicators.sort((a, b) => {
+      const outputDiff =
+        (outputOrderRank.get(a.outputId) ?? Number.MAX_SAFE_INTEGER) -
+        (outputOrderRank.get(b.outputId) ?? Number.MAX_SAFE_INTEGER);
+      if (outputDiff !== 0) return outputDiff;
+      return compareHierarchicalCode(a.code, b.code);
+    });
+
+    // Grupos únicos (preservar orden de aparición) + conteo de productos por grupo
     const groupMap = new Map<string, MatrixGroupDto>();
+    const groupProductIds = new Map<string, Set<string>>();
     for (const p of productsRaw) {
       if (!groupMap.has(p.group_id)) {
-        groupMap.set(p.group_id, { id: p.group_id, name: p.group_name });
+        groupMap.set(p.group_id, { id: p.group_id, name: p.group_name, productCount: 0 });
+        groupProductIds.set(p.group_id, new Set());
       }
+      groupProductIds.get(p.group_id)!.add(p.id);
+    }
+    for (const [gid, group] of groupMap) {
+      group.productCount = groupProductIds.get(gid)!.size;
     }
     const groups = Array.from(groupMap.values());
 
@@ -786,6 +867,7 @@ export class ProductsService {
                 committedTarget: p.committed_target
                   ? Number(p.committed_target)
                   : null,
+                unit: p.indicator_unit,
               }),
             );
 
@@ -845,19 +927,44 @@ export class ProductsService {
       });
     }
 
-    // ── Campos custom (ProductFieldDefinition) ────────────────────────
+    return options;
+  }
+
+  /**
+   * Devuelve las opciones de filtro por catálogo.
+   * Solo campos custom de tipo CATALOG_REF con sus ítems.
+   */
+  async getCatalogFilterOptions(): Promise<CatalogFilterOptionDto[]> {
+    const dataSource = await this.tenantConnection.getTenantConnection();
     const defRepo = dataSource.getRepository(ProductFieldDefinition);
-    const definitions = await defRepo.find({ order: { order: 'ASC' } });
+    const definitions = await defRepo.find({
+      where: { type: 'CATALOG_REF' },
+      order: { order: 'ASC' },
+    });
+
+    const result: CatalogFilterOptionDto[] = [];
 
     for (const def of definitions) {
-      options.push({
-        value: `attributes.${def.key}`,
+      if (!def.linkedCatalogCode) continue;
+
+      const items: Array<{ id: string; name: string; code: string | null }> =
+        await dataSource.query(
+          `SELECT ci.id, ci.name, ci.code
+           FROM catalog_items ci
+           JOIN catalogs c ON ci.catalog_id = c.id
+           WHERE c.code = $1
+           ORDER BY ci.display_order, ci.name`,
+          [def.linkedCatalogCode],
+        );
+
+      result.push({
+        key: def.key,
         label: def.label,
-        available: true,
-        type: 'custom',
+        catalogCode: def.linkedCatalogCode,
+        items: items.map((i) => ({ id: i.id, name: i.name, code: i.code })),
       });
     }
 
-    return options;
+    return result;
   }
 }

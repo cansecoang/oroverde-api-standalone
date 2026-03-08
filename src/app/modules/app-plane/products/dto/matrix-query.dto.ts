@@ -1,5 +1,6 @@
 import { IsString, IsOptional, IsUUID, Matches, Length } from 'class-validator';
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
+import { Transform } from 'class-transformer';
 
 export class MatrixQueryDto {
   @ApiProperty({
@@ -8,9 +9,8 @@ export class MatrixQueryDto {
     enum: ['owner_organization', 'responsible_member', 'country'],
   })
   @IsString()
-  @Matches(/^(owner_organization|responsible_member|country|attributes\..+)$/, {
-    message:
-      'groupBy debe ser owner_organization, responsible_member, country, o attributes.{key}',
+  @Matches(/^(owner_organization|responsible_member|country)$/, {
+    message: 'groupBy debe ser owner_organization, responsible_member o country',
   })
   groupBy = 'owner_organization';
 
@@ -37,4 +37,21 @@ export class MatrixQueryDto {
   @Length(2, 2, { message: 'countryId debe ser exactamente 2 caracteres' })
   @IsOptional()
   countryId?: string;
+
+  @ApiPropertyOptional({
+    description: 'Búsqueda por nombre de producto (parcial, case-insensitive)',
+    example: 'reforest',
+  })
+  @IsString()
+  @IsOptional()
+  search?: string;
+
+  @ApiPropertyOptional({
+    description: 'Filtros de catálogo — JSON: { "field_key": ["itemId1", "itemId2"] }',
+    example: '{"work_package":["uuid1","uuid2"]}',
+  })
+  @IsOptional()
+  @IsString()
+  @Transform(({ value }) => value ?? undefined)
+  catalogFilters?: string;
 }

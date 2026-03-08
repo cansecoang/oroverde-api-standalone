@@ -9,7 +9,7 @@ import { RequirePermission } from '../../../common/decorators/require-permission
 import { CreateProductDto } from './dto/create-product.dto';
 import { UpdateProductDto } from './dto/update-product.dto';
 import { MatrixQueryDto } from './dto/matrix-query.dto';
-import { MatrixResponseDto, GroupByOptionDto } from './dto/matrix-response.dto';
+import { MatrixResponseDto, GroupByOptionDto, CatalogFilterOptionDto } from './dto/matrix-response.dto';
 import { ValidationResultDto } from './dto/validation-result.dto';
 
 @ApiTags('Products')
@@ -61,6 +61,37 @@ export class ProductsController {
     return this.productsService.findAll(+page, +limit, search);
   }
 
+  // ── Matrix ────────────────────────────────────────────────────────────
+  // These routes MUST be declared before :id to avoid NestJS matching
+  // "matrix" as a UUID param.
+
+  @Get('matrix/group-by-options')
+  @RequirePermission(Permission.PRODUCT_READ)
+  @ApiOperation({ summary: 'Opciones disponibles para el dropdown Group By' })
+  @ApiResponse({ status: 200, description: 'Lista de opciones', type: [GroupByOptionDto] })
+  getGroupByOptions() {
+    return this.productsService.getGroupByOptions();
+  }
+
+  @Get('matrix/catalog-filters')
+  @RequirePermission(Permission.PRODUCT_READ)
+  @ApiOperation({ summary: 'Opciones de filtro por catálogo para la matrix' })
+  @ApiResponse({ status: 200, description: 'Filtros de catálogo disponibles', type: [CatalogFilterOptionDto] })
+  getCatalogFilters() {
+    return this.productsService.getCatalogFilterOptions();
+  }
+
+  @Get('matrix')
+  @RequirePermission(Permission.PRODUCT_READ)
+  @ApiOperation({ summary: 'Product Matrix — vista bidimensional [Grupo × Indicadores]' })
+  @ApiResponse({ status: 200, description: 'Datos de la matrix', type: MatrixResponseDto })
+  @ApiResponse({ status: 400, description: 'groupBy inválido' })
+  getMatrix(@Query() dto: MatrixQueryDto) {
+    return this.productsService.buildMatrix(dto);
+  }
+
+  // ── Single Product CRUD ───────────────────────────────────────────────
+
   @Get(':id')
   @RequirePermission(Permission.PRODUCT_READ)
   @ApiOperation({ summary: 'Obtener producto por ID' })
@@ -94,24 +125,5 @@ export class ProductsController {
   @ApiResponse({ status: 404, description: 'Producto no encontrado' })
   remove(@Param('id', ParseUUIDPipe) id: string, @Request() req) {
     return this.productsService.remove(id, req.workspaceMember.id);
-  }
-
-  // ── Matrix ────────────────────────────────────────────────────────────
-
-  @Get('matrix/group-by-options')
-  @RequirePermission(Permission.PRODUCT_READ)
-  @ApiOperation({ summary: 'Opciones disponibles para el dropdown Group By' })
-  @ApiResponse({ status: 200, description: 'Lista de opciones', type: [GroupByOptionDto] })
-  getGroupByOptions() {
-    return this.productsService.getGroupByOptions();
-  }
-
-  @Get('matrix')
-  @RequirePermission(Permission.PRODUCT_READ)
-  @ApiOperation({ summary: 'Product Matrix — vista bidimensional [Grupo × Indicadores]' })
-  @ApiResponse({ status: 200, description: 'Datos de la matrix', type: MatrixResponseDto })
-  @ApiResponse({ status: 400, description: 'groupBy inválido' })
-  getMatrix(@Query() dto: MatrixQueryDto) {
-    return this.productsService.buildMatrix(dto);
   }
 }

@@ -1463,22 +1463,23 @@ Matriz bidimensional de productos × indicadores.
 | `outputId` | string | — | Filtrar por StrategicOutput UUID |
 | `organizationId` | string | — | Filtrar por organización UUID |
 | `countryId` | string | — | Filtrar por código ISO país |
+| `search` | string | — | Búsqueda parcial por nombre de producto (case-insensitive) |
 
 **Response 200:**
 ```json
 {
   "groupByField": { "value": "owner_organization", "label": "Organización Líder", "available": true },
   "indicators": [
-    { "id": "uuid", "code": "1.1", "description": "Hectáreas reforestadas", "outputId": "uuid", "outputCode": "Output 1", "outputName": "Restauración" }
+    { "id": "uuid", "code": "1.1", "description": "Hectáreas reforestadas", "unit": "hectáreas", "totalTarget": 5000, "outputId": "uuid", "outputCode": "Output 1", "outputName": "Restauración" }
   ],
   "matrix": [
     [
-      { "id": "uuid-org", "name": "ONG América" },
+      { "id": "uuid-org", "name": "ONG América", "productCount": 3 },
       {
         "indicator": { "id": "uuid", "code": "1.1", "..." : "..." },
-        "group": { "id": "uuid-org", "name": "ONG América" },
+        "group": { "id": "uuid-org", "name": "ONG América", "productCount": 3 },
         "products": [
-          { "id": "uuid", "name": "Proyecto Reforestación", "deliveryDate": "2025-12-31", "ownerOrgName": "ONG América", "deliverable": "500 ha", "committedTarget": 100 }
+          { "id": "uuid", "name": "Proyecto Reforestación", "deliveryDate": "2025-12-31", "ownerOrgName": "ONG América", "deliverable": "500 ha", "committedTarget": 100, "unit": "hectáreas" }
         ]
       }
     ]
