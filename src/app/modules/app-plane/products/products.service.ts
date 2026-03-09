@@ -238,6 +238,7 @@ export class ProductsService {
         'participatingOrganizations',
         'members',
         'members.member',
+        'members.member.organization',
         'strategies',
         'strategies.indicator',
       ],
