@@ -1,4 +1,4 @@
-import { IsUUID, IsEnum, IsNotEmpty, IsNumber, IsOptional, Max, Min } from 'class-validator';
+import { IsUUID, IsEnum, IsNotEmpty, IsNumber, IsOptional, IsBoolean, Max, Min } from 'class-validator';
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { ProductRole } from '../../../../common/enums/business-roles.enum';
 
@@ -18,4 +18,9 @@ export class AddProductMemberDto {
   @IsOptional()
   @Min(0) @Max(100)
   allocation?: number;
+
+  @ApiPropertyOptional({ description: '¿Es responsable del producto?', default: false })
+  @IsBoolean()
+  @IsOptional()
+  isResponsible?: boolean;
 }

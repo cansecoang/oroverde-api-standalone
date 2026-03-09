@@ -35,7 +35,8 @@ export class ProductMembersService {
       productId,
       memberId: dto.memberId,
       productRole: dto.role,
-      allocation_percentage: dto.allocation || 0
+      allocation_percentage: dto.allocation || 0,
+      isResponsible: dto.isResponsible ?? false,
     });
 
     return pmRepo.save(newProductMember);
