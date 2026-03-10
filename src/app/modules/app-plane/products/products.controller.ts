@@ -9,7 +9,7 @@ import { RequirePermission } from '../../../common/decorators/require-permission
 import { CreateProductDto } from './dto/create-product.dto';
 import { UpdateProductDto } from './dto/update-product.dto';
 import { MatrixQueryDto } from './dto/matrix-query.dto';
-import { MatrixResponseDto, GroupByOptionDto, CatalogFilterOptionDto } from './dto/matrix-response.dto';
+import { MatrixResponseDto, GroupByOptionDto, CatalogFilterOptionDto, MatrixOutputOptionDto } from './dto/matrix-response.dto';
 import { ValidationResultDto } from './dto/validation-result.dto';
 
 @ApiTags('Products')
@@ -79,6 +79,14 @@ export class ProductsController {
   @ApiResponse({ status: 200, description: 'Filtros de catálogo disponibles', type: [CatalogFilterOptionDto] })
   getCatalogFilters() {
     return this.productsService.getCatalogFilterOptions();
+  }
+
+  @Get('matrix/output-options')
+  @RequirePermission(Permission.PRODUCT_READ)
+  @ApiOperation({ summary: 'Outputs estratégicos disponibles para filtrar la matrix' })
+  @ApiResponse({ status: 200, description: 'Lista de outputs', type: [MatrixOutputOptionDto] })
+  getMatrixOutputOptions() {
+    return this.productsService.getMatrixOutputOptions();
   }
 
   @Get('matrix')

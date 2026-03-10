@@ -16,7 +16,6 @@ import { ProductFieldDefinition } from './field-definitions/entities/product-fie
 import { Product } from './products/entities/product.entity';
 import { ProductMember } from './products/entities/product-member.entity';
 import { ProductCustomOrgLink } from './products/entities/product-custom-org-link.entity';
-import { ProductCustomCatalogLink } from './products/entities/product-custom-catalog-link.entity';
 import { StrategyValue } from './strategy/entities/strategy-value.entity';
 import { ProductStrategy } from './strategy/entities/product-strategy.entity';
 import { StrategicIndicator } from './strategy/entities/strategic-indicator.entity';
@@ -51,7 +50,6 @@ import { SetupService } from './setup/setup.service';
       Product,
       ProductMember,
       ProductCustomOrgLink,
-      ProductCustomCatalogLink,
       StrategicOutput,
       StrategicIndicator,
       ProductStrategy,

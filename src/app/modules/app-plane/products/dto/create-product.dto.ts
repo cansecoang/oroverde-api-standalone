@@ -1,7 +1,8 @@
-import { IsString, IsNotEmpty, IsOptional, IsUUID, IsObject, IsDateString, IsArray, Length, ValidateNested } from 'class-validator';
+import { IsString, IsNotEmpty, IsOptional, IsUUID, IsDateString, IsArray, Length, ValidateNested } from 'class-validator';
 import { Type } from 'class-transformer';
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
-import { CustomOrgFieldDto, CustomCatalogFieldDto } from './custom-link-field.dto';
+import { CustomOrgFieldDto } from './custom-link-field.dto';
+import { CustomFieldValueDto } from './custom-field-value.dto';
 
 export class CreateProductDto {
   @ApiProperty({ description: 'Nombre del proyecto/producto', example: 'Proyecto reforestación 2025' })
@@ -51,10 +52,19 @@ export class CreateProductDto {
   @IsOptional()
   participatingOrganizationIds?: string[];
 
-  @ApiPropertyOptional({ description: 'Atributos dinámicos del proyecto', example: { sector: 'ambiental', region: 'norte' } })
-  @IsObject()
+  @ApiPropertyOptional({
+    description: 'Campos custom escalares (EAV Model).',
+    type: [CustomFieldValueDto],
+    example: [
+      { fieldId: 'uuid-field-1', valueText: 'Some value' },
+      { fieldId: 'uuid-field-2', valueCatalogId: 'uuid-catalog-item' },
+    ],
+  })
+  @IsArray()
+  @ValidateNested({ each: true })
+  @Type(() => CustomFieldValueDto)
   @IsOptional()
-  attributes?: Record<string, any>;
+  customValues?: CustomFieldValueDto[];
 
   @ApiPropertyOptional({
     description: 'Campos custom de tipo ORG_MULTI (M:N con organizaciones)',
@@ -66,15 +76,4 @@ export class CreateProductDto {
   @Type(() => CustomOrgFieldDto)
   @IsOptional()
   customOrgFields?: CustomOrgFieldDto[];
-
-  @ApiPropertyOptional({
-    description: 'Campos custom de tipo CATALOG_MULTI (M:N con catalog items)',
-    type: [CustomCatalogFieldDto],
-    example: [{ fieldId: 'uuid-of-field-def', catalogItemIds: ['uuid-item-1', 'uuid-item-2'] }],
-  })
-  @IsArray()
-  @ValidateNested({ each: true })
-  @Type(() => CustomCatalogFieldDto)
-  @IsOptional()
-  customCatalogFields?: CustomCatalogFieldDto[];
 }

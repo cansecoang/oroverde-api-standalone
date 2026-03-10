@@ -1,7 +1,8 @@
-import { Entity, PrimaryGeneratedColumn, Column, ManyToOne, JoinColumn, Index } from 'typeorm';
+import { Entity, PrimaryGeneratedColumn, Column, ManyToOne, JoinColumn, Index, Unique } from 'typeorm';
 import { Catalog } from './catalog.entity';
 
 @Entity('catalog_items')
+@Unique(['catalogId', 'code'])
 export class CatalogItem {
   @PrimaryGeneratedColumn('uuid')
   id: string;

@@ -3,6 +3,7 @@ import {
 } from 'typeorm';
 import { ProductStrategy } from '../../strategy/entities/product-strategy.entity';
 import { ProductMember } from './product-member.entity';
+import { ProductCustomValue } from './product-custom-value.entity';
 import { WorkspaceOrganization } from '../../organizations/entities/workspace-organization.entity';
 import { Country } from './country.entity';
 
@@ -66,8 +67,14 @@ export class Product {
   @OneToMany(() => ProductStrategy, (strategy) => strategy.product)
   strategies: ProductStrategy[];
 
-  // 7. CAMPOS VARIABLES (J-BSON)
-  @Column({ type: 'jsonb', default: {} })
+  // 6. RELACIÓN: CUSTOM VALUES (EAV)
+  @OneToMany(() => ProductCustomValue, (cv) => cv.product, { cascade: true })
+  customValues: ProductCustomValue[];
+
+  // 7. CAMPOS VARIABLES (JSONB) — LEGACY: archivo muerto, no se lee ni escribe.
+  //    La columna física permanece en PostgreSQL para auditoría histórica,
+  //    pero queda excluida de las consultas TypeORM (select: false).
+  @Column({ type: 'jsonb', default: {}, select: false })
   attributes: Record<string, any>;
 
   @CreateDateColumn()

@@ -1,7 +1,8 @@
-import { IsString, IsOptional, IsUUID, IsObject, IsDateString, IsArray, Length, ValidateNested } from 'class-validator';
+import { IsString, IsOptional, IsUUID, IsDateString, IsArray, Length, ValidateNested } from 'class-validator';
 import { Type } from 'class-transformer';
 import { ApiPropertyOptional } from '@nestjs/swagger';
-import { CustomOrgFieldDto, CustomCatalogFieldDto } from './custom-link-field.dto';
+import { CustomOrgFieldDto } from './custom-link-field.dto';
+import { CustomFieldValueDto } from './custom-field-value.dto';
 
 /**
  * UpdateProductDto
@@ -59,10 +60,19 @@ export class UpdateProductDto {
   @IsOptional()
   participatingOrganizationIds?: string[];
 
-  @ApiPropertyOptional({ description: 'Atributos dinámicos del proyecto (se fusiona con los existentes)' })
-  @IsObject()
+  @ApiPropertyOptional({
+    description: 'Campos custom escalares (EAV Model). Reemplaza los existentes.',
+    type: [CustomFieldValueDto],
+    example: [
+      { fieldId: 'uuid-field-1', valueText: 'Some value' },
+      { fieldId: 'uuid-field-2', valueCatalogId: 'uuid-catalog-item' },
+    ],
+  })
+  @IsArray()
+  @ValidateNested({ each: true })
+  @Type(() => CustomFieldValueDto)
   @IsOptional()
-  attributes?: Record<string, any>;
+  customValues?: CustomFieldValueDto[];
 
   @ApiPropertyOptional({
     description: 'Campos custom de tipo ORG_MULTI (M:N con organizaciones). Reemplaza los existentes.',
@@ -73,14 +83,4 @@ export class UpdateProductDto {
   @Type(() => CustomOrgFieldDto)
   @IsOptional()
   customOrgFields?: CustomOrgFieldDto[];
-
-  @ApiPropertyOptional({
-    description: 'Campos custom de tipo CATALOG_MULTI (M:N con catalog items). Reemplaza los existentes.',
-    type: [CustomCatalogFieldDto],
-  })
-  @IsArray()
-  @ValidateNested({ each: true })
-  @Type(() => CustomCatalogFieldDto)
-  @IsOptional()
-  customCatalogFields?: CustomCatalogFieldDto[];
 }

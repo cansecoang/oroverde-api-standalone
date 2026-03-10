@@ -1,15 +1,16 @@
-import { Injectable, BadRequestException, NotFoundException, Scope } from '@nestjs/common';
+import { Injectable, BadRequestException, NotFoundException, Scope, Logger } from '@nestjs/common';
 import { In, DataSource, QueryRunner } from 'typeorm';
 import { Product } from './entities/product.entity';
 import { ProductMember } from './entities/product-member.entity';
 import { ProductCustomOrgLink } from './entities/product-custom-org-link.entity';
-import { ProductCustomCatalogLink } from './entities/product-custom-catalog-link.entity';
+import { ProductCustomValue } from './entities/product-custom-value.entity';
 import { ProductFieldDefinition } from '../field-definitions/entities/product-field-definition.entity';
 import { TenantConnectionService } from '../../tenancy/tenant-connection.service';
 import { AuditLog } from '../audit/entities/audit-log.entity';
 import { CreateProductDto } from './dto/create-product.dto';
 import { UpdateProductDto } from './dto/update-product.dto';
-import { CustomOrgFieldDto, CustomCatalogFieldDto } from './dto/custom-link-field.dto';
+import { CustomFieldValueDto } from './dto/custom-field-value.dto';
+import { CustomOrgFieldDto } from './dto/custom-link-field.dto';
 import { ProductRole } from '../../../common/enums/business-roles.enum';
 import { WorkspaceOrganization } from '../organizations/entities/workspace-organization.entity';
 import { CatalogItem } from '../catalogs/entities/catalog-item.entity';
@@ -22,6 +23,7 @@ import {
   MatrixCellDto,
   GroupByOptionDto,
   CatalogFilterOptionDto,
+  MatrixOutputOptionDto,
 } from './dto/matrix-response.dto';
 import {
   resolveGroupByStrategy,
@@ -84,13 +86,15 @@ export class ProductsService {
 
     try {
       // A. Extraer campos especiales antes de crear el producto
-      const { participatingOrganizationIds, customOrgFields, customCatalogFields, ...productData } = dto;
+      const {
+        participatingOrganizationIds,
+        customOrgFields,
+        customValues,
+        ...productData
+      } = dto;
 
       // B. Guardar el Producto
-      const newProduct = queryRunner.manager.create(Product, { 
-        ...productData,
-        attributes: productData.attributes ?? {}
-      });
+      const newProduct = queryRunner.manager.create(Product, productData);
       const savedProduct = await queryRunner.manager.save(newProduct);
 
       // C. Asignar organizaciones participantes si se enviaron
@@ -122,8 +126,13 @@ export class ProductsService {
         await queryRunner.manager.save(ownerMember);
       }
 
-      // E. Sincronizar campos custom M:N (ORG_MULTI y CATALOG_MULTI)
-      await this.syncCustomLinks(queryRunner, savedProduct.id, customOrgFields, customCatalogFields);
+      // E. Sincronizar campos custom M:N (ORG_MULTI)
+      await this.syncCustomLinks(queryRunner, savedProduct.id, customOrgFields);
+
+      // E2. Guardar campos custom escalares en product_custom_values.
+      if (customValues?.length) {
+        await this.saveCustomValues(queryRunner, savedProduct.id, customValues);
+      }
 
       // F. Guardar el Log de Auditoría
       const auditLog = queryRunner.manager.create(AuditLog, {
@@ -131,10 +140,11 @@ export class ProductsService {
         action: 'CREATE',
         entity: 'PRODUCT',
         entityId: savedProduct.id,
-        changes: { 
+        changes: {
           name: savedProduct.name,
           description: savedProduct.description,
-          attributes: savedProduct.attributes
+          customValues: customValues ?? [],
+          customOrgFields: customOrgFields ?? [],
         }
       });
       await queryRunner.manager.save(auditLog);
@@ -219,9 +229,38 @@ export class ProductsService {
     }
 
     const [items, total] = await qb.getManyAndCount();
-    return { items, total, page, limit, totalPages: Math.ceil(total / limit) };
-  }
 
+    // Enriquecer attributes desde la nueva tabla EAV (product_custom_values)
+    // sin romper el formato legacy esperado por frontend.
+    const ids = items.map((item) => item.id);
+    const customValueRows = ids.length
+      ? await dataSource.getRepository(ProductCustomValue).find({
+          where: { productId: In(ids) },
+          relations: ['fieldDefinition'],
+        })
+      : [];
+
+    const byProductId = new Map<string, ProductCustomValue[]>();
+    for (const row of customValueRows) {
+      const bucket = byProductId.get(row.productId) ?? [];
+      bucket.push(row);
+      byProductId.set(row.productId, bucket);
+    }
+
+    const itemsWithCustomValues = items.map((item) => ({
+      ...item,
+      attributes: this.transformCustomValuesToMap(byProductId.get(item.id)),
+    }));
+
+    return {
+      items: itemsWithCustomValues,
+      total,
+      page,
+      limit,
+      totalPages: Math.ceil(total / limit),
+    };
+  }
+c
   /**
    * Obtiene un producto por su ID con todas las relaciones cargadas.
    * Incluye campos custom M:N transformados por key del field definition.
@@ -241,6 +280,9 @@ export class ProductsService {
         'members.member.organization',
         'strategies',
         'strategies.indicator',
+        'customValues',
+        'customValues.fieldDefinition',
+        'customValues.catalogItem',
       ],
     });
 
@@ -251,8 +293,12 @@ export class ProductsService {
     // ── Cargar campos custom M:N y transformar por key ──────────────
     const customLinksData = await this.loadCustomLinks(dataSource, id);
 
+    // ── Transformar EAV rows → objeto key-value (compatible con frontend) ──
+    const customValuesMap = this.transformCustomValuesToMap(product.customValues);
+
     return {
       ...product,
+      attributes: customValuesMap,
       customLinks: customLinksData,
     };
   }
@@ -275,12 +321,10 @@ export class ProductsService {
     }
 
     // Validar campos custom si se enviaron
-    if (dto.attributes) {
+    if (dto.customValues) {
       const defRepo = dataSource.getRepository(ProductFieldDefinition);
       const definitions = await defRepo.find();
-      // Para update, fusionamos los atributos existentes con los nuevos antes de validar
-      const mergedAttributes = { ...existing.attributes, ...dto.attributes };
-      await this.validateCustomFields(mergedAttributes, definitions, dataSource);
+      await this.validateCustomValueDtos(dto.customValues, definitions, dataSource);
     }
 
     const queryRunner = dataSource.createQueryRunner();
@@ -288,20 +332,14 @@ export class ProductsService {
     await queryRunner.startTransaction();
 
     try {
-      const { participatingOrganizationIds, attributes, customOrgFields, customCatalogFields, ...standardFields } = dto;
+      const { participatingOrganizationIds, customOrgFields, customValues, ...standardFields } = dto;
 
       // A. Actualizar campos estándar
       if (Object.keys(standardFields).length > 0) {
         await queryRunner.manager.update(Product, id, standardFields);
       }
 
-      // B. Fusionar atributos custom
-      if (attributes) {
-        const merged = { ...existing.attributes, ...attributes };
-        await queryRunner.manager.update(Product, id, { attributes: merged });
-      }
-
-      // C. Actualizar organizaciones participantes si se enviaron
+      // B. Actualizar organizaciones participantes si se enviaron
       if (participatingOrganizationIds !== undefined) {
         const product = await queryRunner.manager.findOne(Product, {
           where: { id },
@@ -318,9 +356,14 @@ export class ProductsService {
         }
       }
 
-      // D. Sincronizar campos custom M:N (Delete & Insert)
-      if (customOrgFields !== undefined || customCatalogFields !== undefined) {
-        await this.syncCustomLinks(queryRunner, id, customOrgFields, customCatalogFields);
+      // D. Sincronizar campos custom M:N (ORG_MULTI)
+      if (customOrgFields !== undefined) {
+        await this.syncCustomLinks(queryRunner, id, customOrgFields);
+      }
+
+      // D2. Sincronizar campos custom escalares en product_custom_values.
+      if (customValues !== undefined) {
+        await this.syncCustomValues(queryRunner, id, customValues);
       }
 
       // E. Auditoría
@@ -329,7 +372,11 @@ export class ProductsService {
         action: 'UPDATE',
         entity: 'PRODUCT',
         entityId: id,
-        changes: { ...standardFields, ...(attributes ? { attributes } : {}) },
+        changes: {
+          ...standardFields,
+          ...(customValues ? { customValues } : {}),
+          ...(customOrgFields ? { customOrgFields } : {}),
+        },
       });
       await queryRunner.manager.save(auditLog);
 
@@ -382,7 +429,7 @@ export class ProductsService {
         [id],
       );
       await queryRunner.query(
-        `DELETE FROM product_custom_catalog_links WHERE product_id = $1`,
+        `DELETE FROM product_custom_values WHERE product_id = $1`,
         [id],
       );
 
@@ -414,8 +461,10 @@ export class ProductsService {
     const defRepo = dataSource.getRepository(ProductFieldDefinition);
     const definitions = await defRepo.find();
 
-    // 2. Validar custom fields con validación FK para CATALOG_REF
-    await this.validateCustomFields(dto.attributes, definitions, dataSource);
+    // 2. Validar custom fields (EAV)
+    if (dto.customValues) {
+      await this.validateCustomValueDtos(dto.customValues, definitions, dataSource);
+    }
 
     // 3. Validar organizaciones participantes existen
     if (dto.participatingOrganizationIds?.length) {
@@ -432,84 +481,255 @@ export class ProductsService {
     }
   }
 
+  // ─────────────────────────────────────────────────────────────────────
+  // CUSTOM VALUES — EAV Save, Sync & Transform
+  // ─────────────────────────────────────────────────────────────────────
+
   /**
-   * Valida los atributos dinámicos contra las ProductFieldDefinitions.
-   * - Verifica campos obligatorios
-   * - Valida tipos (NUMBER, DATE, BOOLEAN, TEXT, CATALOG_REF)
-   * - Valida existencia de referencias a catálogos (FK)
+   * Valida payload de customValues contra definiciones y FKs de catálogo.
    */
-  private async validateCustomFields(
-    attributes: Record<string, any> | undefined,
+  private async validateCustomValueDtos(
+    values: CustomFieldValueDto[],
     definitions: ProductFieldDefinition[],
-    dataSource?: any,
+    dataSource: DataSource,
   ): Promise<void> {
-    const ds = dataSource || await this.tenantConnection.getTenantConnection();
-    const catalogItemRepo = ds.getRepository(CatalogItem);
+    if (!values.length) return;
 
-    for (const def of definitions) {
-      const value = attributes?.[def.key];
+    const defById = new Map(definitions.map((d) => [d.id, d]));
+    const seen = new Set<string>();
+    const catalogItemRepo = dataSource.getRepository(CatalogItem);
 
-      // Regla A: ¿Es obligatorio y está vacío?
-      if (def.required && (value === undefined || value === null || value === '')) {
+    for (const row of values) {
+      if (seen.has(row.fieldId)) {
         throw new BadRequestException(
-          `El campo '${def.label}' (${def.key}) es obligatorio para este proyecto.`,
+          `El campo custom '${row.fieldId}' está repetido en el payload.`,
+        );
+      }
+      seen.add(row.fieldId);
+
+      const def = defById.get(row.fieldId);
+      if (!def) {
+        throw new BadRequestException(
+          `El fieldId '${row.fieldId}' no existe en product_field_definitions.`,
         );
       }
 
-      // Regla B: Validar tipo si el valor está presente
-      if (value !== undefined && value !== null && value !== '') {
-        switch (def.type) {
-          case 'NUMBER':
-            if (typeof value !== 'number' && isNaN(Number(value))) {
-              throw new BadRequestException(
-                `El campo '${def.label}' (${def.key}) debe ser un número.`,
-              );
-            }
-            break;
-          case 'BOOLEAN':
-            if (typeof value !== 'boolean') {
-              throw new BadRequestException(
-                `El campo '${def.label}' (${def.key}) debe ser verdadero o falso.`,
-              );
-            }
-            break;
-          case 'DATE':
-            if (isNaN(Date.parse(String(value)))) {
-              throw new BadRequestException(
-                `El campo '${def.label}' (${def.key}) debe ser una fecha válida.`,
-              );
-            }
-            break;
-          case 'CATALOG_REF':
-            if (typeof value !== 'string') {
-              throw new BadRequestException(
-                `El campo '${def.label}' (${def.key}) debe ser un UUID de referencia a catálogo.`,
-              );
-            }
-            
-            // Validar que el CatalogItem existe
-            const catalogItem = await catalogItemRepo.findOne({
-              where: { id: value },
-              relations: ['catalog'],
-            });
-            
-            if (!catalogItem) {
-              throw new BadRequestException(
-                `El valor seleccionado para '${def.label}' no existe en el catálogo.`,
-              );
-            }
-            
-            // Validar que pertenece al catálogo correcto
-            if (def.linkedCatalogCode && catalogItem.catalog.code !== def.linkedCatalogCode) {
-              throw new BadRequestException(
-                `El valor de '${def.label}' pertenece a un catálogo diferente.`,
-              );
-            }
-            break;
-          // TEXT: cualquier string → no necesita validación extra
+      const scalarCandidate = row.valueText ?? row.valueCatalogId ?? null;
+      if (scalarCandidate === null || scalarCandidate === '') {
+        throw new BadRequestException(
+          `El campo '${def.label}' requiere un valor (valueText o valueCatalogId).`,
+        );
+      }
+
+      if (def.type === 'CATALOG_REF') {
+        const catalogId = row.valueCatalogId ?? row.valueText;
+        if (!catalogId || typeof catalogId !== 'string') {
+          throw new BadRequestException(
+            `El campo '${def.label}' requiere valueCatalogId para referencias de catálogo.`,
+          );
+        }
+
+        const catalogItem = await catalogItemRepo.findOne({
+          where: { id: catalogId },
+          relations: ['catalog'],
+        });
+
+        if (!catalogItem) {
+          throw new BadRequestException(
+            `El valor seleccionado para '${def.label}' no existe en el catálogo.`,
+          );
+        }
+
+        if (
+          def.linkedCatalogCode &&
+          catalogItem.catalog.code !== def.linkedCatalogCode
+        ) {
+          throw new BadRequestException(
+            `El valor de '${def.label}' pertenece a un catálogo diferente.`,
+          );
+        }
+
+        continue;
+      }
+
+      const value = String(scalarCandidate);
+      switch (def.type) {
+        case 'NUMBER':
+          if (Number.isNaN(Number(value))) {
+            throw new BadRequestException(
+              `El campo '${def.label}' debe ser numérico.`,
+            );
+          }
+          break;
+        case 'BOOLEAN': {
+          const normalized = value.trim().toLowerCase();
+          if (normalized !== 'true' && normalized !== 'false') {
+            throw new BadRequestException(
+              `El campo '${def.label}' debe ser true o false.`,
+            );
+          }
+          break;
+        }
+        case 'DATE':
+          if (Number.isNaN(Date.parse(value))) {
+            throw new BadRequestException(
+              `El campo '${def.label}' debe ser una fecha válida.`,
+            );
+          }
+          break;
+        default:
+          break;
+      }
+    }
+  }
+
+  /**
+   * Guarda un arreglo de CustomFieldValueDto como ProductCustomValue rows.
+   * Inspecciona el tipo de la definición del campo para decidir en qué
+   * columna almacenar el valor (value_text o value_catalog_id).
+   */
+  private async saveCustomValues(
+    queryRunner: QueryRunner,
+    productId: string,
+    values: CustomFieldValueDto[],
+  ): Promise<void> {
+    if (!values.length) return;
+    await this.upsertCustomValues(queryRunner, productId, values);
+  }
+
+  /**
+   * Upsert parcial: inserta o actualiza SOLO los fieldIds enviados.
+   * No elimina valores existentes que no estén en el payload.
+   */
+  private async upsertCustomValues(
+    queryRunner: QueryRunner,
+    productId: string,
+    incomingValues: CustomFieldValueDto[],
+  ): Promise<void> {
+    if (!incomingValues.length) return;
+
+    // Dedup by fieldId (last wins)
+    const byField = new Map<string, CustomFieldValueDto>();
+    for (const v of incomingValues) byField.set(v.fieldId, v);
+    const deduped = [...byField.values()];
+    const fieldIds = deduped.map((v) => v.fieldId);
+
+    const definitions = await queryRunner.manager
+      .getRepository(ProductFieldDefinition)
+      .findBy({ id: In(fieldIds) });
+    const defMap = new Map(definitions.map((d) => [d.id, d]));
+
+    const existingRows = await queryRunner.manager.find(ProductCustomValue, {
+      where: { productId, fieldId: In(fieldIds) },
+    });
+    const existingByFieldId = new Map(existingRows.map((r) => [r.fieldId, r]));
+
+    const toSave: ProductCustomValue[] = [];
+
+    for (const dto of deduped) {
+      const def = defMap.get(dto.fieldId);
+      if (!def) continue;
+
+      const isCatalogRef = def.type === 'CATALOG_REF';
+      const valueCatalogId = isCatalogRef
+        ? (dto.valueCatalogId ?? dto.valueText ?? null)
+        : null;
+      const valueText = isCatalogRef
+        ? null
+        : (dto.valueText ?? dto.valueCatalogId ?? null);
+
+      const existing = existingByFieldId.get(dto.fieldId);
+      if (existing) {
+        existing.valueCatalogId = valueCatalogId;
+        existing.valueText = valueText === null ? null : String(valueText);
+        toSave.push(existing);
+      } else {
+        const row = new ProductCustomValue();
+        row.productId = productId;
+        row.fieldId = dto.fieldId;
+        row.valueCatalogId = valueCatalogId;
+        row.valueText = valueText === null ? null : String(valueText);
+        toSave.push(row);
+      }
+    }
+
+    if (toSave.length) {
+      await queryRunner.manager.save(ProductCustomValue, toSave);
+    }
+  }
+
+  /**
+   * Sincroniza los custom values existentes con el payload entrante.
+   * Estrategia diff:
+   *   - Si el campo existe → UPDATE su valor
+   *   - Si el campo es nuevo → INSERT
+   *   - Si un campo existente no viene en el payload → DELETE
+   */
+  private async syncCustomValues(
+    queryRunner: QueryRunner,
+    productId: string,
+    incomingValues: CustomFieldValueDto[],
+  ): Promise<void> {
+    // 1. Cargar existentes del producto
+    const existingRows = await queryRunner.manager.find(ProductCustomValue, {
+      where: { productId },
+    });
+
+    // 2. DELETE: campos existentes que no están en el payload entrante
+    const incomingFieldIds = new Set(incomingValues.map((v) => v.fieldId));
+    const toDelete = existingRows.filter((r) => !incomingFieldIds.has(r.fieldId));
+    if (toDelete.length) {
+      await queryRunner.manager.remove(ProductCustomValue, toDelete);
+    }
+
+    // 3. INSERT/UPDATE de los campos presentes en payload
+    await this.upsertCustomValues(queryRunner, productId, incomingValues);
+  }
+
+  /**
+   * Transforma un arreglo de ProductCustomValue rows (con fieldDefinition y
+   * catalogItem cargados) a un objeto key-value compatible con el formato
+   * attributes que el frontend espera.
+   *
+   * Ejemplo de salida:
+   * {
+   *   "work_package": "uuid-catalog-item-id",
+   *   "next_steps": "Complete baseline study",
+   *   "budget": "50000",
+   *   "is_active": "true"
+   * }
+   */
+  private transformCustomValuesToMap(
+    customValues: ProductCustomValue[] | undefined,
+  ): Record<string, any> {
+    if (!customValues?.length) return {};
+
+    const result: Record<string, any> = {};
+
+    for (const cv of customValues) {
+      const key = cv.fieldDefinition?.key;
+      if (!key) continue;
+
+      if (cv.valueCatalogId) {
+        // CATALOG_REF: devolver el UUID
+        result[key] = cv.valueCatalogId;
+      } else if (cv.valueText !== null && cv.valueText !== undefined) {
+        const fieldType = cv.fieldDefinition?.type;
+        if (fieldType === 'NUMBER') {
+          const num = Number(cv.valueText);
+          result[key] = Number.isNaN(num) ? cv.valueText : num;
+        } else if (fieldType === 'BOOLEAN') {
+          const normalized = cv.valueText.trim().toLowerCase();
+          if (normalized === 'true') result[key] = true;
+          else if (normalized === 'false') result[key] = false;
+          else result[key] = cv.valueText;
+        } else {
+          result[key] = cv.valueText;
         }
       }
     }
+
+    return result;
   }
 
   // ─────────────────────────────────────────────────────────────────────
@@ -525,7 +745,6 @@ export class ProductsService {
     queryRunner: QueryRunner,
     productId: string,
     customOrgFields?: CustomOrgFieldDto[],
-    customCatalogFields?: CustomCatalogFieldDto[],
   ): Promise<void> {
     // ── ORG_MULTI ─────────────────────────────────────────────────────
     if (customOrgFields) {
@@ -547,30 +766,6 @@ export class ProductsService {
             }),
           );
           await queryRunner.manager.save(ProductCustomOrgLink, values);
-        }
-      }
-    }
-
-    // ── CATALOG_MULTI ─────────────────────────────────────────────────
-    if (customCatalogFields) {
-      for (const field of customCatalogFields) {
-        // DELETE todos los links de este product + field
-        await queryRunner.query(
-          `DELETE FROM product_custom_catalog_links
-           WHERE product_id = $1 AND field_definition_id = $2`,
-          [productId, field.fieldId],
-        );
-
-        // INSERT nuevos links
-        if (field.catalogItemIds?.length) {
-          const values = field.catalogItemIds.map((itemId) =>
-            queryRunner.manager.create(ProductCustomCatalogLink, {
-              productId,
-              fieldDefinitionId: field.fieldId,
-              catalogItemId: itemId,
-            }),
-          );
-          await queryRunner.manager.save(ProductCustomCatalogLink, values);
         }
       }
     }
@@ -620,34 +815,6 @@ export class ProductsService {
       });
     }
 
-    // ── CATALOG_MULTI: cargar con JOINs ──────────────────────────────
-    const catalogLinks: Array<{
-      field_key: string;
-      catalog_item_id: string;
-      item_name: string;
-      item_code: string;
-    }> = await dataSource.query(
-      `SELECT pfd.key AS field_key,
-              pccl.catalog_item_id,
-              ci.name AS item_name,
-              ci.code AS item_code
-       FROM product_custom_catalog_links pccl
-       JOIN product_field_definitions pfd ON pccl.field_definition_id = pfd.id
-       JOIN catalog_items ci ON pccl.catalog_item_id = ci.id
-       WHERE pccl.product_id = $1
-       ORDER BY pfd."order", ci.display_order, ci.name`,
-      [productId],
-    );
-
-    for (const row of catalogLinks) {
-      if (!result[row.field_key]) result[row.field_key] = [];
-      result[row.field_key].push({
-        id: row.catalog_item_id,
-        name: row.item_name,
-        code: row.item_code,
-      });
-    }
-
     return result;
   }
 
@@ -668,7 +835,7 @@ export class ProductsService {
     const defMap = new Map(
       definitions.map((d) => [
         d.key,
-        { label: d.label, type: d.type, linkedCatalogCode: d.linkedCatalogCode },
+        { id: d.id, label: d.label, type: d.type, linkedCatalogCode: d.linkedCatalogCode },
       ]),
     );
 
@@ -706,17 +873,40 @@ export class ProductsService {
     if (dto.catalogFilters) {
       try {
         const filters: Record<string, string[]> = JSON.parse(dto.catalogFilters);
+        Logger.log(`[Matrix] catalogFilters parsed: ${JSON.stringify(filters)}`, 'ProductsService');
         for (const [fieldKey, itemIds] of Object.entries(filters)) {
           if (!Array.isArray(itemIds) || itemIds.length === 0) continue;
-          if (!/^[a-zA-Z_][a-zA-Z0-9_]*$/.test(fieldKey)) continue;
+          if (!/^[a-zA-Z_][a-zA-Z0-9_\-]*$/.test(fieldKey)) {
+            Logger.warn(`[Matrix] key rejected by regex: "${fieldKey}"`, 'ProductsService');
+            continue;
+          }
           const def = defMap.get(fieldKey);
-          if (!def || def.type !== 'CATALOG_REF') continue;
+          if (!def) {
+            Logger.warn(`[Matrix] key not found in defMap: "${fieldKey}"`, 'ProductsService');
+            continue;
+          }
+          if (def.type !== 'CATALOG_REF') {
+            Logger.warn(`[Matrix] key "${fieldKey}" has type "${def.type}", skipping`, 'ProductsService');
+            continue;
+          }
+          const defIdPlaceholder = `$${paramIdx++}`;
           const placeholders = itemIds.map(() => `$${paramIdx++}`).join(', ');
-          whereFragments.push(`(p.attributes->>'${fieldKey}')::uuid IN (${placeholders})`);
-          params.push(...itemIds);
+          whereFragments.push(
+            `EXISTS (SELECT 1 FROM product_custom_values pcv
+                     WHERE pcv.product_id = p.id
+                       AND pcv.field_id = ${defIdPlaceholder}
+                       AND pcv.value_catalog_id IN (${placeholders}))`,
+          );
+          params.push(def.id, ...itemIds);
+          Logger.log(`[Matrix] filter applied for "${fieldKey}" (${def.type}), itemIds: ${JSON.stringify(itemIds)}`, 'ProductsService');
         }
-      } catch { /* malformed JSON — ignore */ }
+      } catch (e) {
+        Logger.error(`[Matrix] catalogFilters parse/process error: ${e}`, 'ProductsService');
+      }
     }
+
+    Logger.log(`[Matrix] final WHERE: ${whereFragments.length > 0 ? whereFragments.join(' AND ') : '(none)'}`, 'ProductsService');
+    Logger.log(`[Matrix] params: ${JSON.stringify(params)}`, 'ProductsService');
 
     const whereClause =
       whereFragments.length > 0 ? 'WHERE ' + whereFragments.join(' AND ') : '';
@@ -799,6 +989,8 @@ export class ProductsService {
       indicator_unit: string | null;
       owner_org_name: string | null;
     }> = await dataSource.query(productQuery, params);
+
+    Logger.log(`[Matrix] Q2 returned ${productsRaw.length} product rows (with WHERE: ${whereFragments.length > 0})`, 'ProductsService');
 
     // ── Ensamble en memoria ───────────────────────────────────────────
 
@@ -933,7 +1125,7 @@ export class ProductsService {
 
   /**
    * Devuelve las opciones de filtro por catálogo.
-   * Solo campos custom de tipo CATALOG_REF con sus ítems.
+   * Campos custom de tipo CATALOG_REF con sus ítems.
    */
   async getCatalogFilterOptions(): Promise<CatalogFilterOptionDto[]> {
     const dataSource = await this.tenantConnection.getTenantConnection();
@@ -942,6 +1134,8 @@ export class ProductsService {
       where: { type: 'CATALOG_REF' },
       order: { order: 'ASC' },
     });
+
+    Logger.log(`[Matrix] getCatalogFilterOptions: found ${definitions.length} definitions: ${definitions.map(d => `${d.key}(${d.type})`).join(', ')}`, 'ProductsService');
 
     const result: CatalogFilterOptionDto[] = [];
 
@@ -962,10 +1156,23 @@ export class ProductsService {
         key: def.key,
         label: def.label,
         catalogCode: def.linkedCatalogCode,
+        type: def.type as 'CATALOG_REF',
         items: items.map((i) => ({ id: i.id, name: i.name, code: i.code })),
       });
     }
 
     return result;
+  }
+
+  /**
+   * Devuelve los outputs estratégicos disponibles para el filtro de la matrix.
+   */
+  async getMatrixOutputOptions(): Promise<MatrixOutputOptionDto[]> {
+    const dataSource = await this.tenantConnection.getTenantConnection();
+    const outputs: Array<{ id: string; code: string; name: string }> =
+      await dataSource.query(
+        `SELECT id, code, name FROM strategic_outputs ORDER BY "order", code`,
+      );
+    return outputs;
   }
 }

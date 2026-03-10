@@ -89,6 +89,20 @@ export class CatalogFilterOptionDto {
   @ApiProperty({ description: 'Código del catálogo vinculado' })
   catalogCode: string;
 
+  @ApiProperty({ description: 'Tipo del campo', enum: ['CATALOG_REF'] })
+  type: 'CATALOG_REF';
+
   @ApiProperty({ type: [CatalogFilterItemDto], description: 'Ítems disponibles para filtrar' })
   items: CatalogFilterItemDto[];
+}
+
+export class MatrixOutputOptionDto {
+  @ApiProperty({ description: 'UUID del output estratégico' })
+  id: string;
+
+  @ApiProperty({ description: 'Código del output (ej: "1", "2")' })
+  code: string;
+
+  @ApiProperty({ description: 'Nombre del output' })
+  name: string;
 }

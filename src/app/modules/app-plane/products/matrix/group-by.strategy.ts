@@ -58,19 +58,25 @@ export function buildAttributeStrategy(
   label: string,
   isCatalogRef: boolean,
 ): GroupByStrategy {
+  // key proviene de ProductFieldDefinition; escapar comillas simples por seguridad
+  const safeKey = key.replace(/'/g, "''");
+
   if (isCatalogRef) {
     return {
       selectGroup: `ci_attr.id as group_id, ci_attr.name as group_name`,
-      joinClause: `JOIN catalog_items ci_attr ON (p.attributes->>'${key}')::uuid = ci_attr.id`,
+      joinClause: `JOIN product_field_definitions pfd_attr ON pfd_attr.key = '${safeKey}'
+      JOIN product_custom_values pcv_attr ON pcv_attr.product_id = p.id AND pcv_attr.field_id = pfd_attr.id
+      JOIN catalog_items ci_attr ON pcv_attr.value_catalog_id = ci_attr.id`,
       orderBy: 'ci_attr.name',
       label,
     };
   }
 
   return {
-    selectGroup: `p.attributes->>'${key}' as group_id, p.attributes->>'${key}' as group_name`,
-    joinClause: '',
-    orderBy: `p.attributes->>'${key}'`,
+    selectGroup: `pcv_attr.value_text as group_id, pcv_attr.value_text as group_name`,
+    joinClause: `JOIN product_field_definitions pfd_attr ON pfd_attr.key = '${safeKey}'
+    JOIN product_custom_values pcv_attr ON pcv_attr.product_id = p.id AND pcv_attr.field_id = pfd_attr.id`,
+    orderBy: `pcv_attr.value_text`,
     label,
   };
 }

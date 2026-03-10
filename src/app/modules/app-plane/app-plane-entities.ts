@@ -12,7 +12,7 @@ import { WorkspaceMember }        from './members/entities/workspace-member.enti
 import { Product }                from './products/entities/product.entity';
 import { ProductMember }          from './products/entities/product-member.entity';
 import { ProductCustomOrgLink }    from './products/entities/product-custom-org-link.entity';
-import { ProductCustomCatalogLink } from './products/entities/product-custom-catalog-link.entity';
+import { ProductCustomValue }      from './products/entities/product-custom-value.entity';
 import { ProjectCheckIn }         from './products/entities/project-checkin.entity';
 import { ProductFieldDefinition } from './field-definitions/entities/product-field-definition.entity';
 import { Task }                   from './tasks/entities/task.entity';
@@ -33,7 +33,7 @@ export const APP_PLANE_ENTITIES = [
   Product,
   ProductMember,
   ProductCustomOrgLink,
-  ProductCustomCatalogLink,
+  ProductCustomValue,
   ProjectCheckIn,
   ProductFieldDefinition,
   Catalog,
