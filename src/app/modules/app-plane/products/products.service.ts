@@ -541,8 +541,8 @@ c
         }
 
         if (
-          def.linkedCatalogCode &&
-          catalogItem.catalog.code !== def.linkedCatalogCode
+          def.linkedCatalogId &&
+          catalogItem.catalog.id !== def.linkedCatalogId
         ) {
           throw new BadRequestException(
             `El valor de '${def.label}' pertenece a un catálogo diferente.`,
@@ -835,7 +835,7 @@ c
     const defMap = new Map(
       definitions.map((d) => [
         d.key,
-        { id: d.id, label: d.label, type: d.type, linkedCatalogCode: d.linkedCatalogCode },
+        { id: d.id, label: d.label, type: d.type, linkedCatalogId: d.linkedCatalogId },
       ]),
     );
 
@@ -1140,16 +1140,15 @@ c
     const result: CatalogFilterOptionDto[] = [];
 
     for (const def of definitions) {
-      if (!def.linkedCatalogCode) continue;
+      if (!def.linkedCatalogId) continue;
 
       const items: Array<{ id: string; name: string; code: string | null }> =
         await dataSource.query(
           `SELECT ci.id, ci.name, ci.code
            FROM catalog_items ci
-           JOIN catalogs c ON ci.catalog_id = c.id
-           WHERE c.code = $1
+           WHERE ci.catalog_id = $1
            ORDER BY ci.display_order, ci.name`,
-          [def.linkedCatalogCode],
+          [def.linkedCatalogId],
         );
 
       result.push({

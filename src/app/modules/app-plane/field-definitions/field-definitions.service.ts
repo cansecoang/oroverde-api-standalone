@@ -14,7 +14,8 @@ export class FieldDefinitionsService {
     key: string; 
     label: string; 
     type: string; 
-    linkedCatalogCode?: string; 
+    linkedCatalogCode?: string;
+    linkedCatalogId?: string;
     required?: boolean;
     order?: number;
   }) {
@@ -23,20 +24,30 @@ export class FieldDefinitionsService {
     const fieldRepo = dataSource.getRepository(ProductFieldDefinition);
     const catalogRepo = dataSource.getRepository(Catalog);
     
-    // Validación de Integridad
+    // Validación de Integridad para CATALOG_REF
     if (data.type === 'CATALOG_REF') {
-        if (!data.linkedCatalogCode) {
-            throw new BadRequestException('Falta linkedCatalogCode para el campo tipo Catálogo');
-        }
-
-        // ¿Existe el catálogo en la BD del Tenant?
-        const catalogExists = await catalogRepo.findOne({ 
-            where: { code: data.linkedCatalogCode } 
-        });
-        
-        if (!catalogExists) {
+        if (data.linkedCatalogId) {
+            // Ruta preferida: validar por UUID
+            const catalog = await catalogRepo.findOne({ where: { id: data.linkedCatalogId } });
+            if (!catalog) {
+                throw new BadRequestException(
+                    `El catálogo con id '${data.linkedCatalogId}' no existe en tu cuenta.`,
+                );
+            }
+            // Auto-poblar linkedCatalogCode para compatibilidad
+            data.linkedCatalogCode = catalog.code;
+        } else if (data.linkedCatalogCode) {
+            // Ruta legacy: resolver code → id
+            const catalog = await catalogRepo.findOne({ where: { code: data.linkedCatalogCode } });
+            if (!catalog) {
+                throw new BadRequestException(
+                    `El catálogo '${data.linkedCatalogCode}' no existe en tu cuenta. Créalo primero.`,
+                );
+            }
+            data.linkedCatalogId = catalog.id;
+        } else {
             throw new BadRequestException(
-                `El catálogo '${data.linkedCatalogCode}' no existe en tu cuenta. Créalo primero.`
+                'Falta linkedCatalogId o linkedCatalogCode para el campo tipo Catálogo',
             );
         }
     }
@@ -67,7 +78,7 @@ export class FieldDefinitionsService {
 
   async updateDefinition(
     id: string,
-    data: { label?: string; linkedCatalogCode?: string; required?: boolean; order?: number },
+    data: { label?: string; linkedCatalogCode?: string; linkedCatalogId?: string; required?: boolean; order?: number },
   ) {
     const dataSource = await this.tenantConnection.getTenantConnection();
     const repo = dataSource.getRepository(ProductFieldDefinition);
@@ -77,16 +88,28 @@ export class FieldDefinitionsService {
       throw new NotFoundException(`Campo con id '${id}' no encontrado`);
     }
 
-    // If changing linkedCatalogCode, validate it exists
-    if (data.linkedCatalogCode !== undefined && field.type === 'CATALOG_REF') {
+    // Resolver catálogo vinculado si se está cambiando
+    if (field.type === 'CATALOG_REF') {
       const catalogRepo = dataSource.getRepository(Catalog);
-      const catalogExists = await catalogRepo.findOne({
-        where: { code: data.linkedCatalogCode },
-      });
-      if (!catalogExists) {
-        throw new BadRequestException(
-          `El catálogo '${data.linkedCatalogCode}' no existe en tu cuenta.`,
-        );
+
+      if (data.linkedCatalogId !== undefined) {
+        // Ruta preferida: validar por UUID
+        const catalog = await catalogRepo.findOne({ where: { id: data.linkedCatalogId } });
+        if (!catalog) {
+          throw new BadRequestException(
+            `El catálogo con id '${data.linkedCatalogId}' no existe en tu cuenta.`,
+          );
+        }
+        data.linkedCatalogCode = catalog.code;
+      } else if (data.linkedCatalogCode !== undefined) {
+        // Ruta legacy: resolver code → id
+        const catalog = await catalogRepo.findOne({ where: { code: data.linkedCatalogCode } });
+        if (!catalog) {
+          throw new BadRequestException(
+            `El catálogo '${data.linkedCatalogCode}' no existe en tu cuenta.`,
+          );
+        }
+        data.linkedCatalogId = catalog.id;
       }
     }
 

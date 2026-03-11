@@ -1,4 +1,4 @@
-import { IsString, IsNotEmpty, IsOptional, IsBoolean, IsInt, Min, MaxLength } from 'class-validator';
+import { IsString, IsNotEmpty, IsOptional, IsBoolean, IsInt, IsUUID, Min, MaxLength } from 'class-validator';
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 
 export class CreateFieldDefinitionDto {
@@ -19,10 +19,15 @@ export class CreateFieldDefinitionDto {
   @IsNotEmpty()
   type: string;
 
-  @ApiPropertyOptional({ description: 'Código del catálogo vinculado (si type=CATALOG_REF)', example: 'project_phases' })
+  @ApiPropertyOptional({ description: 'Código del catálogo vinculado (legacy, se resuelve a linkedCatalogId)', example: 'project_phases' })
   @IsString()
   @IsOptional()
   linkedCatalogCode?: string;
+
+  @ApiPropertyOptional({ description: 'UUID del catálogo vinculado (preferido sobre linkedCatalogCode)', example: '550e8400-e29b-41d4-a716-446655440000' })
+  @IsUUID('4')
+  @IsOptional()
+  linkedCatalogId?: string;
 
   @ApiPropertyOptional({ description: '¿Campo obligatorio?', example: true })
   @IsBoolean()

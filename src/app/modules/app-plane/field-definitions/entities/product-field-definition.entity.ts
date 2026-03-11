@@ -1,4 +1,5 @@
-import { Entity, PrimaryGeneratedColumn, Column, CreateDateColumn, UpdateDateColumn } from 'typeorm';
+import { Entity, PrimaryGeneratedColumn, Column, CreateDateColumn, UpdateDateColumn, ManyToOne, JoinColumn } from 'typeorm';
+import { Catalog } from '../../catalogs/entities/catalog.entity';
 
 @Entity('product_field_definitions')
 export class ProductFieldDefinition {
@@ -19,10 +20,18 @@ export class ProductFieldDefinition {
   @Column()
   type: string; 
 
-  // 👇 VITAL: Si type es 'CATALOG_REF', aquí guardamos qué catálogo cargar
-  // Ej: 'SOIL_TYPES_CAT'
+  // LEGACY: se mantiene por compatibilidad con el frontend.
+  // La relación fuerte es linkedCatalogId (FK → catalogs.id).
   @Column({ name: 'linked_catalog_code', nullable: true })
   linkedCatalogCode: string;
+
+  // FK fuerte hacia catalogs.id (reemplaza el vínculo débil por texto)
+  @Column({ name: 'linked_catalog_id', type: 'uuid', nullable: true })
+  linkedCatalogId: string | null;
+
+  @ManyToOne(() => Catalog, { nullable: true, onDelete: 'SET NULL' })
+  @JoinColumn({ name: 'linked_catalog_id' })
+  linkedCatalog?: Catalog | null;
 
   @Column({ default: false })
   required: boolean;

@@ -87,7 +87,7 @@ export function buildAttributeStrategy(
  * Resuelve la estrategia GroupBy completa dado un valor de `groupBy`.
  *
  * @param groupBy - "owner_organization" | "responsible_member" | "country" | "attributes.{key}"
- * @param fieldDefinitions - Map de key → { label, type, linkedCatalogCode }
+ * @param fieldDefinitions - Map de key → { label, type, linkedCatalogId }
  *                           obtenido de ProductFieldDefinition
  * @returns GroupByStrategy | null si el valor no es válido
  */
@@ -95,7 +95,7 @@ export function resolveGroupByStrategy(
   groupBy: string,
   fieldDefinitions: Map<
     string,
-    { label: string; type: string; linkedCatalogCode: string | null }
+    { label: string; type: string; linkedCatalogId: string | null }
   >,
 ): GroupByStrategy | null {
   // 1. Estrategia base
