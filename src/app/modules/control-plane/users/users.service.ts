@@ -127,6 +127,20 @@ export class GlobalUsersService {
     const user = await this.repo.findOne({ where: { id } });
     if (!user) throw new NotFoundException('Usuario no encontrado');
 
+    // Validar que no exista otro usuario con el mismo email
+    if (changes.email !== undefined) {
+      const nextEmail = changes.email.trim().toLowerCase();
+      const existingByEmail = await this.repo
+        .createQueryBuilder('u')
+        .where('LOWER(u.email) = LOWER(:email)', { email: nextEmail })
+        .andWhere('u.id <> :id', { id })
+        .getOne();
+
+      if (existingByEmail) {
+        throw new BadRequestException('A user with this email already exists');
+      }
+    }
+
     // Validar que la organización destino exista
     if (changes.organization_id) {
       const org = await this.orgRepo.findOne({ where: { id: changes.organization_id } });
@@ -136,6 +150,7 @@ export class GlobalUsersService {
     }
 
     const mergeData: Record<string, any> = {};
+  if (changes.email !== undefined) mergeData.email = changes.email.trim().toLowerCase();
     if (changes.first_name !== undefined) mergeData.firstName = changes.first_name;
     if (changes.last_name !== undefined) mergeData.lastName = changes.last_name;
     if (changes.organization_id !== undefined) mergeData.organizationId = changes.organization_id;
