@@ -39,7 +39,10 @@ export class TasksController {
     @Body() dto: UpdateTaskStatusDto,
     @Request() req,
   ) {
-    return this.service.updateStatus(id, dto, req.workspaceMember?.id);
+    return this.service.updateStatus(id, dto, {
+      workspaceMemberId: req.workspaceMember?.id,
+      tenantRole: req.workspaceMember?.tenantRole,
+    });
   }
 
   @Patch(':id')
@@ -54,7 +57,10 @@ export class TasksController {
     @Body() dto: UpdateTaskDto,
     @Request() req,
   ) {
-    return this.service.update(id, dto, req.workspaceMember?.id);
+    return this.service.update(id, dto, {
+      workspaceMemberId: req.workspaceMember?.id,
+      tenantRole: req.workspaceMember?.tenantRole,
+    });
   }
 
   @Get('project/:productId')

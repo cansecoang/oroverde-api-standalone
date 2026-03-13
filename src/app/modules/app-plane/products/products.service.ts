@@ -211,16 +211,21 @@ export class ProductsService {
     }
   }
 
-  async findAll(page = 1, limit = 50, search?: string) {
+  async findAll(
+    page = 1,
+    limit = 50,
+    search?: string,
+    organizationId?: string,
+    countryId?: string,
+  ) {
     const dataSource = await this.tenantConnection.getTenantConnection();
     const repo = dataSource.getRepository(Product);
+
+    const safePage = Number.isFinite(page) && page > 0 ? page : 1;
+    const safeLimit = Number.isFinite(limit) && limit > 0 ? limit : 50;
+    const cappedLimit = Math.min(safeLimit, 100);
     
-    const qb = repo.createQueryBuilder('product')
-      .leftJoinAndSelect('product.country', 'country')
-      .leftJoinAndSelect('product.ownerOrganization', 'ownerOrg')
-      .orderBy('product.name', 'ASC')
-      .skip((page - 1) * limit)
-      .take(limit);
+    const qb = repo.createQueryBuilder('product');
 
     if (search?.trim()) {
       qb.andWhere('(product.name ILIKE :search OR product.description ILIKE :search)', {
@@ -228,14 +233,60 @@ export class ProductsService {
       });
     }
 
-    const [items, total] = await qb.getManyAndCount();
+    if (organizationId) {
+      if (organizationId === 'none') {
+        qb.andWhere('product.ownerOrganizationId IS NULL');
+      } else {
+        qb.andWhere('product.ownerOrganizationId = :organizationId', { organizationId });
+      }
+    }
+
+    if (countryId) {
+      if (countryId === 'none') {
+        qb.andWhere('product.countryId IS NULL');
+      } else {
+        qb.andWhere('product.countryId = :countryId', { countryId });
+      }
+    }
+
+    const total = await qb.clone().getCount();
+    const totalPages = Math.max(1, Math.ceil(total / cappedLimit));
+    const effectivePage = Math.min(safePage, totalPages);
+
+    const idRows: Array<{ id: string }> = await qb
+      .clone()
+      .select('product.id', 'id')
+      .orderBy('product.name', 'ASC')
+      .skip((effectivePage - 1) * cappedLimit)
+      .take(cappedLimit)
+      .getRawMany();
+
+    const pagedIds = idRows.map((row) => row.id);
+    let items: Product[] = [];
+
+    if (pagedIds.length > 0) {
+      items = await repo
+        .createQueryBuilder('product')
+        .leftJoinAndSelect('product.country', 'country')
+        .leftJoinAndSelect('product.ownerOrganization', 'ownerOrg')
+        .where('product.id IN (:...ids)', { ids: pagedIds })
+        .getMany();
+
+      // Preservar orden paginado por nombre.
+      const orderMap = new Map(pagedIds.map((id, index) => [id, index]));
+      items.sort(
+        (a, b) =>
+          (orderMap.get(a.id) ?? Number.MAX_SAFE_INTEGER) -
+          (orderMap.get(b.id) ?? Number.MAX_SAFE_INTEGER),
+      );
+    }
 
     // Enriquecer attributes desde la nueva tabla EAV (product_custom_values)
     // sin romper el formato legacy esperado por frontend.
-    const ids = items.map((item) => item.id);
-    const customValueRows = ids.length
+    const customValueProductIds = items.map((item) => item.id);
+    const customValueRows = customValueProductIds.length
       ? await dataSource.getRepository(ProductCustomValue).find({
-          where: { productId: In(ids) },
+          where: { productId: In(customValueProductIds) },
           relations: ['fieldDefinition'],
         })
       : [];
@@ -255,12 +306,12 @@ export class ProductsService {
     return {
       items: itemsWithCustomValues,
       total,
-      page,
-      limit,
-      totalPages: Math.ceil(total / limit),
+      page: effectivePage,
+      limit: cappedLimit,
+      totalPages,
     };
   }
-c
+
   /**
    * Obtiene un producto por su ID con todas las relaciones cargadas.
    * Incluye campos custom M:N transformados por key del field definition.
@@ -959,20 +1010,22 @@ c
       };
     }
 
-    // ── Q2: Productos con group_id y indicator_id ─────────────────────
+    // ── Q2: Traer TODOS los productos, con o sin indicador ───────────
     const productQuery = `
       SELECT p.id, p.name, p.delivery_date, p.deliverable,
              ${strategy.selectGroup},
              ps.indicator_id,
              ps.committed_target,
              si.unit AS indicator_unit,
-             wo_ctx.name AS owner_org_name
+             wo_ctx.name AS owner_org_name,
+             c_prod.name AS country_name
       FROM products p
       ${strategy.joinClause}
-      JOIN product_strategies ps ON ps.product_id = p.id
-      JOIN strategic_indicators si ON ps.indicator_id = si.id
-      JOIN strategic_outputs so ON si.output_id = so.id
+      LEFT JOIN product_strategies ps ON ps.product_id = p.id
+      LEFT JOIN strategic_indicators si ON ps.indicator_id = si.id
+      LEFT JOIN strategic_outputs so ON si.output_id = so.id
       LEFT JOIN workspace_organizations wo_ctx ON p.owner_organization_id = wo_ctx.id
+      LEFT JOIN countries c_prod ON p.country_id = c_prod.id
       ${whereClause}
       ORDER BY p.name
     `;
@@ -984,21 +1037,22 @@ c
       deliverable: string | null;
       group_id: string;
       group_name: string;
-      indicator_id: string;
+      indicator_id: string | null;
       committed_target: number | null;
       indicator_unit: string | null;
       owner_org_name: string | null;
+      country_name: string | null;
     }> = await dataSource.query(productQuery, params);
 
     Logger.log(`[Matrix] Q2 returned ${productsRaw.length} product rows (with WHERE: ${whereFragments.length > 0})`, 'ProductsService');
 
     // ── Ensamble en memoria ───────────────────────────────────────────
 
-    // Filtrar indicadores que tienen al menos 1 producto
+    // 1. Incluir todos los indicadores + columna especial "Sin indicador"
     const indicatorIdsWithProducts = new Set(
-      productsRaw.map((p) => p.indicator_id),
+      productsRaw.filter((p) => p.indicator_id).map((p) => p.indicator_id),
     );
-    const indicators: MatrixIndicatorDto[] = indicatorsRaw
+    let indicators: MatrixIndicatorDto[] = indicatorsRaw
       .filter((ind) => indicatorIdsWithProducts.has(ind.id))
       .map((ind) => ({
         id: ind.id,
@@ -1010,6 +1064,22 @@ c
         outputCode: ind.output_code,
         outputName: ind.output_name,
       }));
+
+    // Agregar columna especial para productos sin indicador
+    const SIN_INDICADOR_ID = '__sin_indicador__';
+    indicators = [
+      ...indicators,
+      {
+        id: SIN_INDICADOR_ID,
+        code: 'Sin indicador',
+        description: 'Productos sin indicador asociado',
+        unit: null,
+        totalTarget: null,
+        outputId: '',
+        outputCode: '',
+        outputName: '',
+      },
+    ];
 
     // Mantener el orden de outputs y ordenar metas por código jerárquico natural.
     const outputOrderRank = new Map<string, number>();
@@ -1046,23 +1116,44 @@ c
     const matrix: Array<[MatrixGroupDto, ...MatrixCellDto[]]> = groups.map(
       (group) => {
         const cells: MatrixCellDto[] = indicators.map((ind) => {
-          const cellProducts = productsRaw
-            .filter(
-              (p) => p.group_id === group.id && p.indicator_id === ind.id,
-            )
-            .map(
-              (p): MatrixProductDto => ({
-                id: p.id,
-                name: p.name,
-                deliveryDate: p.delivery_date,
-                ownerOrgName: p.owner_org_name,
-                deliverable: p.deliverable,
-                committedTarget: p.committed_target
-                  ? Number(p.committed_target)
-                  : null,
-                unit: p.indicator_unit,
-              }),
-            );
+          let cellProducts: MatrixProductDto[];
+          if (ind.id === SIN_INDICADOR_ID) {
+            // Productos sin indicador
+            cellProducts = productsRaw
+              .filter((p) => p.group_id === group.id && !p.indicator_id)
+              .map(
+                (p): MatrixProductDto => ({
+                  id: p.id,
+                  name: p.name,
+                  deliveryDate: p.delivery_date,
+                  ownerOrgName: p.owner_org_name,
+                  countryName: p.country_name,
+                  deliverable: p.deliverable,
+                  committedTarget: null,
+                  unit: null,
+                }),
+              );
+          } else {
+            // Productos con ese indicador
+            cellProducts = productsRaw
+              .filter(
+                (p) => p.group_id === group.id && p.indicator_id === ind.id,
+              )
+              .map(
+                (p): MatrixProductDto => ({
+                  id: p.id,
+                  name: p.name,
+                  deliveryDate: p.delivery_date,
+                  ownerOrgName: p.owner_org_name,
+                  countryName: p.country_name,
+                  deliverable: p.deliverable,
+                  committedTarget: p.committed_target
+                    ? Number(p.committed_target)
+                    : null,
+                  unit: p.indicator_unit,
+                }),
+              );
+          }
 
           return {
             indicator: ind,
@@ -1075,7 +1166,7 @@ c
       },
     );
 
-    // Conteo de productos únicos
+    // Conteo de productos únicos (todos)
     const totalProducts = new Set(productsRaw.map((p) => p.id)).size;
 
     return {

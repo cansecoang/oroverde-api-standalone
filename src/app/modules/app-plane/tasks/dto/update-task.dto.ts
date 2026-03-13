@@ -2,6 +2,11 @@ import { IsUUID, IsNotEmpty, IsOptional, IsString } from 'class-validator';
 import { ApiPropertyOptional } from '@nestjs/swagger';
 
 export class UpdateTaskDto {
+  @ApiPropertyOptional({ description: 'UUID del producto (contexto para autorización)' })
+  @IsUUID()
+  @IsOptional()
+  productId?: string;
+
   @ApiPropertyOptional({ description: 'Título de la tarea' })
   @IsString()
   @IsOptional()

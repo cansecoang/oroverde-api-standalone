@@ -27,6 +27,8 @@ export class MatrixProductDto {
   @ApiProperty() name: string;
   @ApiPropertyOptional() deliveryDate: string | null;
   @ApiPropertyOptional() ownerOrgName: string | null;
+  @ApiPropertyOptional({ description: 'Nombre del pais del producto' })
+  countryName: string | null;
   @ApiPropertyOptional() deliverable: string | null;
   @ApiPropertyOptional({ description: 'committed_target del ProductStrategy para este indicador' })
   committedTarget: number | null;

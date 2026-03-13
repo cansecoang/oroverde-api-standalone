@@ -51,14 +51,18 @@ export class ProductsController {
   @ApiQuery({ name: 'page', required: false, type: Number, description: 'Número de página' })
   @ApiQuery({ name: 'limit', required: false, type: Number, description: 'Elementos por página' })
   @ApiQuery({ name: 'search', required: false, type: String, description: 'Buscar por nombre o descripción' })
+  @ApiQuery({ name: 'organizationId', required: false, type: String, description: 'Filtrar por organización líder' })
+  @ApiQuery({ name: 'countryId', required: false, type: String, description: 'Filtrar por país' })
   @ApiResponse({ status: 200, description: 'Lista de productos' })
   @ApiResponse({ status: 401, description: 'No autenticado' })
   findAll(
     @Query('page') page = 1,
     @Query('limit') limit = 50,
     @Query('search') search?: string,
+    @Query('organizationId') organizationId?: string,
+    @Query('countryId') countryId?: string,
   ) {
-    return this.productsService.findAll(+page, +limit, search);
+    return this.productsService.findAll(+page, +limit, search, organizationId, countryId);
   }
 
   // ── Matrix ────────────────────────────────────────────────────────────
