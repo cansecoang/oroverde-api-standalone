@@ -228,9 +228,22 @@ export class ProductsService {
     const qb = repo.createQueryBuilder('product');
 
     if (search?.trim()) {
-      qb.andWhere('(product.name ILIKE :search OR product.description ILIKE :search)', {
-        search: `%${search.trim()}%`,
-      });
+      const searchValue = `%${search.trim()}%`;
+
+      // Search also over visible related fields used in the list UI.
+      qb
+        .leftJoin('product.ownerOrganization', 'searchOwnerOrg')
+        .leftJoin('product.country', 'searchCountry')
+        .andWhere(
+          `(
+            product.name ILIKE :search
+            OR product.description ILIKE :search
+            OR searchOwnerOrg.name ILIKE :search
+            OR searchCountry.name ILIKE :search
+            OR product.delivery_date::text ILIKE :search
+          )`,
+          { search: searchValue },
+        );
     }
 
     if (organizationId) {

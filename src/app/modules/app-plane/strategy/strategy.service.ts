@@ -89,6 +89,39 @@ export class StrategyService {
     return repo.save(assignment);
   }
 
+  async updateCommittedTarget(productId: string, assignmentId: string, target: number) {
+    const dataSource = await this.tenantConnection.getTenantConnection();
+    const strategyRepo = dataSource.getRepository(ProductStrategy);
+    const normalizedTarget = Number(target);
+
+    if (!Number.isFinite(normalizedTarget) || normalizedTarget < 0) {
+      throw new BadRequestException('La meta comprometida debe ser un número válido mayor o igual a 0.');
+    }
+
+    const strategy = await strategyRepo.findOne({
+      where: { id: assignmentId, productId },
+      relations: ['values'],
+    });
+
+    if (!strategy) {
+      throw new NotFoundException('La asignación producto-indicador no fue encontrada.');
+    }
+
+    const currentReportedTotal = (strategy.values ?? []).reduce(
+      (sum, item) => sum + Number(item.value),
+      0,
+    );
+
+    if (normalizedTarget < currentReportedTotal) {
+      throw new BadRequestException(
+        `La meta comprometida no puede ser menor al avance ya reportado (${currentReportedTotal}).`,
+      );
+    }
+
+    strategy.committed_target = normalizedTarget;
+    return strategyRepo.save(strategy);
+  }
+
   // ---------------------------------------------------------
   // 3. OPERACIÓN (Reportes con HARD CAP 🔒)
   // ---------------------------------------------------------

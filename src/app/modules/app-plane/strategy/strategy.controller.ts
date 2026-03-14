@@ -1,4 +1,4 @@
-import { Controller, Post, Get, Body, Param, UseGuards, ParseUUIDPipe } from '@nestjs/common';
+import { Controller, Post, Get, Patch, Body, Param, UseGuards, ParseUUIDPipe } from '@nestjs/common';
 import { ApiTags, ApiCookieAuth, ApiOperation, ApiResponse, ApiParam } from '@nestjs/swagger';
 import { StrategyService } from './strategy.service';
 import { AuthenticatedGuard } from '../../../common/guards/authenticated.guard';
@@ -10,6 +10,7 @@ import { CreateOutputDto } from './dto/create-output.dto';
 import { CreateIndicatorDto } from './dto/create-indicator.dto';
 import { AssignStrategyDto } from './dto/assign-strategy.dto';
 import { ReportProgressDto } from './dto/report-progress.dto';
+import { UpdateStrategyTargetDto } from './dto/update-strategy-target.dto';
 
 @ApiTags('Strategy')
 @ApiCookieAuth()
@@ -56,6 +57,22 @@ export class StrategyController {
   @ApiResponse({ status: 401, description: 'No autenticado' })
   report(@Body() dto: ReportProgressDto) {
     return this.service.reportProgress(dto);
+  }
+
+  @Patch('project/:productId/assignments/:assignmentId/target')
+  @RequirePermission(Permission.STRATEGY_WRITE)
+  @ApiOperation({ summary: 'Actualizar meta comprometida de una asignación estratégica' })
+  @ApiParam({ name: 'productId', type: String, description: 'UUID del producto' })
+  @ApiParam({ name: 'assignmentId', type: String, description: 'UUID de la asignación producto-indicador' })
+  @ApiResponse({ status: 200, description: 'Meta comprometida actualizada exitosamente' })
+  @ApiResponse({ status: 400, description: 'La nueva meta es inválida' })
+  @ApiResponse({ status: 404, description: 'Asignación no encontrada' })
+  updateCommittedTarget(
+    @Param('productId', ParseUUIDPipe) productId: string,
+    @Param('assignmentId', ParseUUIDPipe) assignmentId: string,
+    @Body() dto: UpdateStrategyTargetDto,
+  ) {
+    return this.service.updateCommittedTarget(productId, assignmentId, dto.target);
   }
 
   @Get('tree')
