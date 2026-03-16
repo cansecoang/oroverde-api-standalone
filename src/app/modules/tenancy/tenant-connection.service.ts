@@ -64,6 +64,16 @@ export class TenantConnectionService {
     @InjectDataSource('default') private controlPlaneConnection: DataSource
   ) {}
 
+  async getCurrentTenantDateWindow(): Promise<{ startDate: string | null; endDate: string | null }> {
+    const tenantSlug = this.request?.tenantId;
+    const tenant = await this.resolveTenantBySlug(tenantSlug);
+
+    return {
+      startDate: tenant.startDate ?? null,
+      endDate: tenant.endDate ?? null,
+    };
+  }
+
   async getTenantConnection(): Promise<DataSource> {
     const tenantSlug = this.request.tenantId; // Header: x-tenant-id
 
@@ -75,20 +85,7 @@ export class TenantConnectionService {
     }
 
     // 2. Buscar tenant en Control Plane
-    const tenant = await this.controlPlaneConnection
-      .getRepository(Tenant)
-      .findOne({ where: { slug: tenantSlug } });
-
-    if (!tenant) {
-      throw new Error(`Tenant '${tenantSlug}' not found in Control Plane`);
-    }
-
-    // 2.5 Verificar que el tenant esté ACTIVO (cierra C-3 / T-8)
-    if (tenant.status !== TenantStatus.ACTIVE) {
-      throw new Error(
-        `Tenant '${tenantSlug}' is ${tenant.status}. Access denied.`,
-      );
-    }
+    const tenant = await this.resolveTenantBySlug(tenantSlug);
 
     // 3. Crear DataSource y guardarlo en pool
     const dbSync = process.env.DB_SYNCHRONIZE === 'true';
@@ -121,5 +118,27 @@ export class TenantConnectionService {
 
     this.logger.log(`🔌 Connected to SILO DB: ${tenant.dbName} (pooled)`);
     return connection;
+  }
+
+  private async resolveTenantBySlug(tenantSlug: string | null | undefined): Promise<Tenant> {
+    if (!tenantSlug || typeof tenantSlug !== 'string') {
+      throw new Error('Tenant slug is required to resolve tenant context.');
+    }
+
+    const tenant = await this.controlPlaneConnection
+      .getRepository(Tenant)
+      .findOne({ where: { slug: tenantSlug } });
+
+    if (!tenant) {
+      throw new Error(`Tenant '${tenantSlug}' not found in Control Plane`);
+    }
+
+    if (tenant.status !== TenantStatus.ACTIVE) {
+      throw new Error(
+        `Tenant '${tenantSlug}' is ${tenant.status}. Access denied.`,
+      );
+    }
+
+    return tenant;
   }
 }

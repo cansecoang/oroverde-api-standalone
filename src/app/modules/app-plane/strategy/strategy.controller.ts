@@ -1,4 +1,4 @@
-import { Controller, Post, Get, Patch, Body, Param, UseGuards, ParseUUIDPipe } from '@nestjs/common';
+import { Controller, Post, Get, Patch, Body, Param, Query, UseGuards, ParseUUIDPipe } from '@nestjs/common';
 import { ApiTags, ApiCookieAuth, ApiOperation, ApiResponse, ApiParam } from '@nestjs/swagger';
 import { StrategyService } from './strategy.service';
 import { AuthenticatedGuard } from '../../../common/guards/authenticated.guard';
@@ -11,6 +11,8 @@ import { CreateIndicatorDto } from './dto/create-indicator.dto';
 import { AssignStrategyDto } from './dto/assign-strategy.dto';
 import { ReportProgressDto } from './dto/report-progress.dto';
 import { UpdateStrategyTargetDto } from './dto/update-strategy-target.dto';
+import { StrategyTimelineQueryDto } from './dto/strategy-timeline-query.dto';
+import { StrategyTimelineResponseDto } from './dto/strategy-timeline-response.dto';
 
 @ApiTags('Strategy')
 @ApiCookieAuth()
@@ -82,6 +84,19 @@ export class StrategyController {
   @ApiResponse({ status: 401, description: 'No autenticado' })
   getTree() {
     return this.service.getFullStrategyTree();
+  }
+
+  @Get('timeline')
+  @RequirePermission(Permission.STRATEGY_READ)
+  @ApiOperation({ summary: 'Obtener timeline consolidado de indicadores' })
+  @ApiResponse({
+    status: 200,
+    description: 'Timeline consolidado por indicador → workpackage → producto → tareas',
+    type: StrategyTimelineResponseDto,
+  })
+  @ApiResponse({ status: 401, description: 'No autenticado' })
+  getTimeline(@Query() query: StrategyTimelineQueryDto) {
+    return this.service.getIndicatorTimeline(query);
   }
 
   @Get('project/:productId')

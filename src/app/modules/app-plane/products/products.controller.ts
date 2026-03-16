@@ -10,6 +10,7 @@ import { CreateProductDto } from './dto/create-product.dto';
 import { UpdateProductDto } from './dto/update-product.dto';
 import { MatrixQueryDto } from './dto/matrix-query.dto';
 import { MatrixResponseDto, GroupByOptionDto, CatalogFilterOptionDto, MatrixOutputOptionDto } from './dto/matrix-response.dto';
+import { ProductMetricsDto } from './dto/product-metrics.dto';
 import { ValidationResultDto } from './dto/validation-result.dto';
 
 @ApiTags('Products')
@@ -103,6 +104,16 @@ export class ProductsController {
   }
 
   // ── Single Product CRUD ───────────────────────────────────────────────
+
+  @Get(':id/metrics')
+  @RequirePermission(Permission.PRODUCT_READ)
+  @ApiOperation({ summary: 'Obtener metricas consolidadas del producto' })
+  @ApiParam({ name: 'id', type: String, description: 'UUID del producto' })
+  @ApiResponse({ status: 200, description: 'Metricas del producto', type: ProductMetricsDto })
+  @ApiResponse({ status: 404, description: 'Producto no encontrado' })
+  getProductMetrics(@Param('id', ParseUUIDPipe) id: string) {
+    return this.productsService.getProductMetrics(id);
+  }
 
   @Get(':id')
   @RequirePermission(Permission.PRODUCT_READ)

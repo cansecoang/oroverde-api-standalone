@@ -1411,6 +1411,54 @@ Obtener producto con todas sus relaciones, incluyendo customLinks.
 
 ---
 
+### GET `/products/:id/metrics`
+
+Obtener métricas consolidadas del producto (resumen de tareas, distribución por estado,
+avance por fases y pendientes por organización).
+
+**Permisos:** `product:read`
+
+**Response 200:**
+```json
+{
+  "productId": "uuid",
+  "productName": "Proyecto Reforestación",
+  "productSummary": {
+    "totalTasks": 42,
+    "completedTasks": 19,
+    "inProgressTasks": 14,
+    "pendingTasks": 9,
+    "completionPercentage": 45.2
+  },
+  "statusDistribution": [
+    { "id": "uuid", "name": "Not Started", "code": "NOT_STARTED", "value": 9, "percentage": 21.4 },
+    { "id": "uuid", "name": "In Progress", "code": "IN_PROGRESS", "value": 10, "percentage": 23.8 },
+    { "id": "uuid", "name": "Reviewed", "code": "REVIEWED", "value": 7, "percentage": 16.7 },
+    { "id": "uuid", "name": "Completed", "code": "COMPLETED", "value": 12, "percentage": 28.6 }
+  ],
+  "phaseMetrics": [
+    {
+      "id": "uuid",
+      "name": "Planning",
+      "totalTasks": 11,
+      "completedTasks": 3,
+      "pendingTasks": 8,
+      "completionPercentage": 27.3
+    }
+  ],
+  "pendingTasksByOrganization": [
+    { "organizationId": "uuid-org", "organizationName": "Oroverde", "pendingCount": 6, "percentage": 66.7 },
+    { "organizationId": "uuid-org-2", "organizationName": "Nuup", "pendingCount": 3, "percentage": 33.3 }
+  ],
+  "totalPendingTasks": 9,
+  "generatedAt": "2026-03-14T21:00:00.000Z"
+}
+```
+
+> Regla de clasificación para KPIs: `REVIEWED` cuenta como completada.
+
+---
+
 ### PATCH `/products/:id`
 
 Actualizar producto. Todos los campos son opcionales.

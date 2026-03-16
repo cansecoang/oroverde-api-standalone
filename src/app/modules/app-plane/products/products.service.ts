@@ -26,10 +26,19 @@ import {
   MatrixOutputOptionDto,
 } from './dto/matrix-response.dto';
 import {
+  ProductMetricsDto,
+  ProductSummaryDto,
+  StatusDistributionItemDto,
+  PhaseMetricItemDto,
+  PendingByOrganizationItemDto,
+} from './dto/product-metrics.dto';
+import {
   resolveGroupByStrategy,
   getBaseStrategyKeys,
   getBaseStrategyLabel,
 } from './matrix/group-by.strategy';
+
+type MetricsTaskBucket = 'completed' | 'inProgress' | 'pending';
 
 function compareHierarchicalCode(a: string, b: string): number {
   const aParts = a.split('.');
@@ -364,6 +373,228 @@ export class ProductsService {
       ...product,
       attributes: customValuesMap,
       customLinks: customLinksData,
+    };
+  }
+
+  async getProductMetrics(id: string): Promise<ProductMetricsDto> {
+    const dataSource = await this.tenantConnection.getTenantConnection();
+    const productRepo = dataSource.getRepository(Product);
+
+    const product = await productRepo.findOne({ where: { id } });
+    if (!product) {
+      throw new NotFoundException(`Producto con ID '${id}' no encontrado.`);
+    }
+
+    const statusRows = (await dataSource.query(
+      `SELECT
+         COALESCE(st.id::text, '__no_status__') AS status_id,
+         COALESCE(NULLIF(TRIM(st.name), ''), 'No Status') AS status_name,
+         COALESCE(NULLIF(TRIM(st.code), ''), 'NO_STATUS') AS status_code,
+         COALESCE(st.display_order, 9999) AS status_order,
+         COUNT(*)::int AS task_count
+       FROM tasks t
+       LEFT JOIN catalog_items st ON st.id = t.status_id
+       WHERE t.product_id = $1
+       GROUP BY st.id, st.name, st.code, st.display_order
+       ORDER BY COALESCE(st.display_order, 9999), COALESCE(st.name, 'No Status')`,
+      [id],
+    )) as Array<{
+      status_id: string;
+      status_name: string;
+      status_code: string;
+      status_order: number | string | null;
+      task_count: number | string | null;
+    }>;
+
+    const totalTasks = statusRows.reduce(
+      (sum, row) => sum + this.toNumericValue(row.task_count),
+      0,
+    );
+
+    let completedTasks = 0;
+    let inProgressTasks = 0;
+    let pendingTasks = 0;
+
+    const statusDistribution: StatusDistributionItemDto[] = statusRows.map((row) => {
+      const value = this.toNumericValue(row.task_count);
+      const bucket = this.resolveTaskBucket(row.status_code, row.status_name);
+
+      if (bucket === 'completed') {
+        completedTasks += value;
+      } else if (bucket === 'inProgress') {
+        inProgressTasks += value;
+      } else {
+        pendingTasks += value;
+      }
+
+      return {
+        id: row.status_id,
+        name: row.status_name,
+        code: row.status_code,
+        value,
+        percentage: this.toPercentage(value, totalTasks),
+      };
+    });
+
+    const phaseRows = (await dataSource.query(
+      `SELECT
+         COALESCE(ph.id::text, '__no_phase__') AS phase_id,
+         COALESCE(NULLIF(TRIM(ph.name), ''), 'No Phase') AS phase_name,
+         COALESCE(NULLIF(TRIM(ph.code), ''), 'NO_PHASE') AS phase_code,
+         COALESCE(ph.display_order, 9999) AS phase_order,
+         COALESCE(NULLIF(TRIM(st.name), ''), 'No Status') AS status_name,
+         COALESCE(NULLIF(TRIM(st.code), ''), 'NO_STATUS') AS status_code,
+         COUNT(*)::int AS task_count
+       FROM tasks t
+       LEFT JOIN catalog_items ph ON ph.id = t.phase_id
+       LEFT JOIN catalog_items st ON st.id = t.status_id
+       WHERE t.product_id = $1
+       GROUP BY ph.id, ph.name, ph.code, ph.display_order, st.name, st.code
+       ORDER BY COALESCE(ph.display_order, 9999), COALESCE(ph.name, 'No Phase')`,
+      [id],
+    )) as Array<{
+      phase_id: string;
+      phase_name: string;
+      phase_code: string;
+      phase_order: number | string | null;
+      status_name: string;
+      status_code: string;
+      task_count: number | string | null;
+    }>;
+
+    const phaseAccumulator = new Map<
+      string,
+      {
+        id: string;
+        name: string;
+        order: number;
+        totalTasks: number;
+        completedTasks: number;
+      }
+    >();
+
+    for (const row of phaseRows) {
+      const taskCount = this.toNumericValue(row.task_count);
+      const phaseId = row.phase_id;
+
+      if (!phaseAccumulator.has(phaseId)) {
+        phaseAccumulator.set(phaseId, {
+          id: phaseId,
+          name: row.phase_name,
+          order: this.toNumericValue(row.phase_order),
+          totalTasks: 0,
+          completedTasks: 0,
+        });
+      }
+
+      const phaseEntry = phaseAccumulator.get(phaseId);
+      if (!phaseEntry) {
+        continue;
+      }
+
+      phaseEntry.totalTasks += taskCount;
+      if (this.resolveTaskBucket(row.status_code, row.status_name) === 'completed') {
+        phaseEntry.completedTasks += taskCount;
+      }
+    }
+
+    const phaseMetrics: PhaseMetricItemDto[] = [...phaseAccumulator.values()]
+      .sort((a, b) => {
+        if (a.order !== b.order) {
+          return a.order - b.order;
+        }
+        return a.name.localeCompare(b.name, 'es');
+      })
+      .map((phase) => {
+        const pending = Math.max(phase.totalTasks - phase.completedTasks, 0);
+        return {
+          id: phase.id,
+          name: phase.name,
+          totalTasks: phase.totalTasks,
+          completedTasks: phase.completedTasks,
+          pendingTasks: pending,
+          completionPercentage: this.toPercentage(phase.completedTasks, phase.totalTasks),
+        };
+      });
+
+    const pendingByOrgRows = (await dataSource.query(
+      `SELECT
+         COALESCE(org.id::text, '__unassigned__') AS organization_id,
+         COALESCE(NULLIF(TRIM(org.name), ''), 'Unassigned') AS organization_name,
+         COALESCE(NULLIF(TRIM(st.name), ''), 'No Status') AS status_name,
+         COALESCE(NULLIF(TRIM(st.code), ''), 'NO_STATUS') AS status_code,
+         COUNT(*)::int AS task_count
+       FROM tasks t
+       LEFT JOIN workspace_organizations org ON org.id = t.assigned_organization_id
+       LEFT JOIN catalog_items st ON st.id = t.status_id
+       WHERE t.product_id = $1
+       GROUP BY org.id, org.name, st.name, st.code
+       ORDER BY COALESCE(org.name, 'Unassigned')`,
+      [id],
+    )) as Array<{
+      organization_id: string;
+      organization_name: string;
+      status_name: string;
+      status_code: string;
+      task_count: number | string | null;
+    }>;
+
+    const pendingByOrgAccumulator = new Map<string, PendingByOrganizationItemDto>();
+
+    for (const row of pendingByOrgRows) {
+      if (this.resolveTaskBucket(row.status_code, row.status_name) !== 'pending') {
+        continue;
+      }
+
+      const pendingCount = this.toNumericValue(row.task_count);
+      const orgId = row.organization_id;
+
+      if (!pendingByOrgAccumulator.has(orgId)) {
+        pendingByOrgAccumulator.set(orgId, {
+          organizationId: orgId,
+          organizationName: row.organization_name,
+          pendingCount: 0,
+          percentage: 0,
+        });
+      }
+
+      const orgEntry = pendingByOrgAccumulator.get(orgId);
+      if (!orgEntry) {
+        continue;
+      }
+
+      orgEntry.pendingCount += pendingCount;
+    }
+
+    const totalPendingTasks = [...pendingByOrgAccumulator.values()].reduce(
+      (sum, row) => sum + row.pendingCount,
+      0,
+    );
+
+    const pendingTasksByOrganization = [...pendingByOrgAccumulator.values()]
+      .sort((a, b) => b.pendingCount - a.pendingCount || a.organizationName.localeCompare(b.organizationName, 'es'))
+      .map((item) => ({
+        ...item,
+        percentage: this.toPercentage(item.pendingCount, totalPendingTasks),
+      }));
+
+    const productSummary: ProductSummaryDto = {
+      totalTasks,
+      completedTasks,
+      inProgressTasks,
+      pendingTasks,
+      completionPercentage: this.toPercentage(completedTasks, totalTasks),
+    };
+
+    return {
+      productId: product.id,
+      productName: product.name,
+      productSummary,
+      statusDistribution,
+      phaseMetrics,
+      pendingTasksByOrganization,
+      totalPendingTasks,
+      generatedAt: new Date().toISOString(),
     };
   }
 
@@ -1277,5 +1508,99 @@ export class ProductsService {
         `SELECT id, code, name FROM strategic_outputs ORDER BY "order", code`,
       );
     return outputs;
+  }
+
+  private resolveTaskBucket(statusCodeRaw: string | null | undefined, statusNameRaw: string | null | undefined): MetricsTaskBucket {
+    const normalizedCode = this.normalizeMetricsToken(statusCodeRaw);
+    const normalizedName = this.normalizeMetricsToken(statusNameRaw);
+
+    const completedValues = new Set([
+      'completed',
+      'reviewed',
+      'done',
+      'finalized',
+      'finished',
+      'completado',
+      'completada',
+      'cerrado',
+      'cerrada',
+    ]);
+
+    const inProgressValues = new Set([
+      'inprogress',
+      'onhold',
+      'blocked',
+      'active',
+      'inprocess',
+      'enprogreso',
+    ]);
+
+    const pendingValues = new Set([
+      'notstarted',
+      'pending',
+      'todo',
+      'backlog',
+      'nostatus',
+      'none',
+    ]);
+
+    if (
+      completedValues.has(normalizedCode) ||
+      completedValues.has(normalizedName) ||
+      normalizedCode.includes('complet') ||
+      normalizedName.includes('complet')
+    ) {
+      return 'completed';
+    }
+
+    if (
+      inProgressValues.has(normalizedCode) ||
+      inProgressValues.has(normalizedName)
+    ) {
+      return 'inProgress';
+    }
+
+    if (
+      pendingValues.has(normalizedCode) ||
+      pendingValues.has(normalizedName)
+    ) {
+      return 'pending';
+    }
+
+    // Unknown custom statuses default to pending to avoid over-reporting completion.
+    return 'pending';
+  }
+
+  private normalizeMetricsToken(value: string | null | undefined): string {
+    if (!value) {
+      return '';
+    }
+
+    return value
+      .toLowerCase()
+      .normalize('NFD')
+      .replace(/[\u0300-\u036f]/g, '')
+      .replace(/[^a-z0-9]/g, '');
+  }
+
+  private toPercentage(value: number, total: number): number {
+    if (!Number.isFinite(value) || !Number.isFinite(total) || total <= 0) {
+      return 0;
+    }
+
+    return Math.round(((value / total) * 100) * 10) / 10;
+  }
+
+  private toNumericValue(value: number | string | null | undefined): number {
+    if (typeof value === 'number') {
+      return Number.isFinite(value) ? value : 0;
+    }
+
+    if (typeof value === 'string') {
+      const parsed = Number(value);
+      return Number.isFinite(parsed) ? parsed : 0;
+    }
+
+    return 0;
   }
 }
