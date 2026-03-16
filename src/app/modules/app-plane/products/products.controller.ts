@@ -54,6 +54,19 @@ export class ProductsController {
   @ApiQuery({ name: 'search', required: false, type: String, description: 'Buscar por nombre o descripción' })
   @ApiQuery({ name: 'organizationId', required: false, type: String, description: 'Filtrar por organización líder' })
   @ApiQuery({ name: 'countryId', required: false, type: String, description: 'Filtrar por país' })
+  @ApiQuery({
+    name: 'groupBy',
+    required: false,
+    type: String,
+    description: 'Agrupar/ordenar listado por owner_organization, responsible_member o country',
+  })
+  @ApiQuery({ name: 'outputId', required: false, type: String, description: 'Filtrar por output estratégico (UUID)' })
+  @ApiQuery({
+    name: 'catalogFilters',
+    required: false,
+    type: String,
+    description: 'JSON con filtros de catálogo: {"fieldKey":["itemId1","itemId2"]}',
+  })
   @ApiResponse({ status: 200, description: 'Lista de productos' })
   @ApiResponse({ status: 401, description: 'No autenticado' })
   findAll(
@@ -62,8 +75,20 @@ export class ProductsController {
     @Query('search') search?: string,
     @Query('organizationId') organizationId?: string,
     @Query('countryId') countryId?: string,
+    @Query('groupBy') groupBy?: string,
+    @Query('outputId') outputId?: string,
+    @Query('catalogFilters') catalogFilters?: string,
   ) {
-    return this.productsService.findAll(+page, +limit, search, organizationId, countryId);
+    return this.productsService.findAll(
+      +page,
+      +limit,
+      search,
+      organizationId,
+      countryId,
+      groupBy,
+      outputId,
+      catalogFilters,
+    );
   }
 
   // ── Matrix ────────────────────────────────────────────────────────────
@@ -101,6 +126,26 @@ export class ProductsController {
   @ApiResponse({ status: 400, description: 'groupBy inválido' })
   getMatrix(@Query() dto: MatrixQueryDto) {
     return this.productsService.buildMatrix(dto);
+  }
+
+  @Get('capabilities')
+  @RequirePermission(Permission.PRODUCT_READ)
+  @ApiOperation({ summary: 'Capacidades del usuario actual sobre Productos' })
+  @ApiResponse({
+    status: 200,
+    description: 'Capabilities del módulo products para el usuario autenticado',
+    schema: {
+      type: 'object',
+      properties: {
+        canCreateProduct: { type: 'boolean' },
+      },
+    },
+  })
+  getCapabilities(@Request() req) {
+    return this.productsService.getCapabilities(
+      req.workspaceMember.id,
+      req.workspaceMember.tenantRole,
+    );
   }
 
   // ── Single Product CRUD ───────────────────────────────────────────────

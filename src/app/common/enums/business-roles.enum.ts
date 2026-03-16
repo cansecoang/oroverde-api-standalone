@@ -36,7 +36,7 @@ export enum Permission {
   CATALOG_WRITE = 'catalog:write',
 
   // --- Producto ---
-  PRODUCT_WRITE = 'product:write',       // crear producto (solo general_coordinator)
+  PRODUCT_WRITE = 'product:write',       // crear/actualizar producto (general_coordinator y product_coordinator con membresía)
   PRODUCT_READ = 'product:read',         // listar / ver productos
   PRODUCT_UPDATE = 'product:update',     // modificar producto
 

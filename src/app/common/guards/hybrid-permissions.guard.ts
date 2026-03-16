@@ -107,7 +107,25 @@ export class HybridPermissionsGuard implements CanActivate {
       request.query?.productId;
 
     if (!productId) {
-      throw new ForbiddenException('Se requiere nivel General Coordinator para esta acción global');
+      // Global product writes (create product) are allowed for users that are
+      // already product coordinators in at least one existing product.
+      if (requiredPermission === Permission.PRODUCT_WRITE) {
+        const tenantDataSource = await this.tenantConnectionService.getTenantConnection();
+        const coordinatorMembership = (await tenantDataSource
+          .getRepository(this.productMemberEntity)
+          .findOne({
+            where: {
+              memberId: workspaceMember.id,
+              productRole: ProductRole.PRODUCT_COORDINATOR,
+            },
+          } as any)) as IProductMember | null;
+
+        if (coordinatorMembership) {
+          return true;
+        }
+      }
+
+      throw new ForbiddenException('Se requiere nivel General Coordinator o Product Coordinator para esta acción global');
     }
 
     // Conexión al silo del tenant (ya cacheada en pool)

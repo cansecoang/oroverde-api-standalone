@@ -11,7 +11,7 @@ import { CreateProductDto } from './dto/create-product.dto';
 import { UpdateProductDto } from './dto/update-product.dto';
 import { CustomFieldValueDto } from './dto/custom-field-value.dto';
 import { CustomOrgFieldDto } from './dto/custom-link-field.dto';
-import { ProductRole } from '../../../common/enums/business-roles.enum';
+import { ProductRole, TenantRole } from '../../../common/enums/business-roles.enum';
 import { WorkspaceOrganization } from '../organizations/entities/workspace-organization.entity';
 import { CatalogItem } from '../catalogs/entities/catalog-item.entity';
 import { MatrixQueryDto } from './dto/matrix-query.dto';
@@ -226,6 +226,9 @@ export class ProductsService {
     search?: string,
     organizationId?: string,
     countryId?: string,
+    groupBy?: string,
+    outputId?: string,
+    catalogFilters?: string,
   ) {
     const dataSource = await this.tenantConnection.getTenantConnection();
     const repo = dataSource.getRepository(Product);
@@ -233,8 +236,10 @@ export class ProductsService {
     const safePage = Number.isFinite(page) && page > 0 ? page : 1;
     const safeLimit = Number.isFinite(limit) && limit > 0 ? limit : 50;
     const cappedLimit = Math.min(safeLimit, 100);
-    
+
     const qb = repo.createQueryBuilder('product');
+    const allowedGroupBy = new Set(['owner_organization', 'responsible_member', 'country']);
+    const effectiveGroupBy = groupBy && allowedGroupBy.has(groupBy) ? groupBy : undefined;
 
     if (search?.trim()) {
       const searchValue = `%${search.trim()}%`;
@@ -271,14 +276,98 @@ export class ProductsService {
       }
     }
 
-    const total = await qb.clone().getCount();
+    if (outputId) {
+      qb.andWhere(
+        `EXISTS (
+          SELECT 1
+          FROM product_strategies ps
+          JOIN strategic_indicators si ON si.id = ps.indicator_id
+          WHERE ps.product_id = product.id
+            AND si.output_id = :outputId
+        )`,
+        { outputId },
+      );
+    }
+
+    if (catalogFilters) {
+      try {
+        const filters = JSON.parse(catalogFilters) as Record<string, string[]>;
+        const defRepo = dataSource.getRepository(ProductFieldDefinition);
+        const definitions = await defRepo.find({
+          where: {
+            type: In(['CATALOG_REF', 'CATALOG_MULTI'] as any),
+          } as any,
+        });
+        const defByKey = new Map(definitions.map((def) => [def.key, def]));
+
+        let filterIndex = 0;
+        for (const [fieldKey, itemIds] of Object.entries(filters)) {
+          if (!Array.isArray(itemIds) || itemIds.length === 0) {
+            continue;
+          }
+
+          const def = defByKey.get(fieldKey);
+          if (!def) {
+            continue;
+          }
+
+          const fieldParam = `catalogField_${filterIndex}`;
+          const itemsParam = `catalogItems_${filterIndex}`;
+
+          qb.andWhere(
+            `EXISTS (
+              SELECT 1
+              FROM product_custom_values pcv
+              WHERE pcv.product_id = product.id
+                AND pcv.field_id = :${fieldParam}
+                AND pcv.value_catalog_id IN (:...${itemsParam})
+            )`,
+            {
+              [fieldParam]: def.id,
+              [itemsParam]: itemIds,
+            },
+          );
+
+          filterIndex += 1;
+        }
+      } catch {
+        // Ignore malformed filter payloads and keep default listing behavior.
+      }
+    }
+
+    if (effectiveGroupBy === 'owner_organization') {
+      qb.leftJoin('product.ownerOrganization', 'groupOwnerOrg');
+      qb.addOrderBy('groupOwnerOrg.name', 'ASC', 'NULLS LAST');
+    } else if (effectiveGroupBy === 'country') {
+      qb.leftJoin('product.country', 'groupCountry');
+      qb.addOrderBy('groupCountry.name', 'ASC', 'NULLS LAST');
+    } else if (effectiveGroupBy === 'responsible_member') {
+      qb.leftJoin('product.members', 'groupResponsibleMember', 'groupResponsibleMember.isResponsible = true')
+        .leftJoin('groupResponsibleMember.member', 'groupResponsibleWorkspaceMember');
+      qb.addOrderBy('groupResponsibleWorkspaceMember.full_name', 'ASC', 'NULLS LAST');
+    }
+
+    qb.addOrderBy('product.name', 'ASC');
+
+    const total = await qb.clone().distinct(true).getCount();
     const totalPages = Math.max(1, Math.ceil(total / cappedLimit));
     const effectivePage = Math.min(safePage, totalPages);
 
-    const idRows: Array<{ id: string }> = await qb
+    const idQuery = qb
       .clone()
       .select('product.id', 'id')
-      .orderBy('product.name', 'ASC')
+      .addSelect('product.name', 'order_name');
+
+    if (effectiveGroupBy === 'owner_organization') {
+      idQuery.addSelect('groupOwnerOrg.name', 'order_group');
+    } else if (effectiveGroupBy === 'country') {
+      idQuery.addSelect('groupCountry.name', 'order_group');
+    } else if (effectiveGroupBy === 'responsible_member') {
+      idQuery.addSelect('groupResponsibleWorkspaceMember.full_name', 'order_group');
+    }
+
+    const idRows: Array<{ id: string }> = await idQuery
+      .distinct(true)
       .skip((effectivePage - 1) * cappedLimit)
       .take(cappedLimit)
       .getRawMany();
@@ -331,6 +420,29 @@ export class ProductsService {
       page: effectivePage,
       limit: cappedLimit,
       totalPages,
+    };
+  }
+
+  async getCapabilities(workspaceMemberId: string, tenantRole?: string): Promise<{ canCreateProduct: boolean }> {
+    const SUPER_ADMIN_SENTINEL = '00000000-0000-0000-0000-000000000000';
+
+    if (
+      workspaceMemberId === SUPER_ADMIN_SENTINEL ||
+      tenantRole === TenantRole.GENERAL_COORDINATOR
+    ) {
+      return { canCreateProduct: true };
+    }
+
+    const dataSource = await this.tenantConnection.getTenantConnection();
+    const coordinatorMembership = await dataSource.getRepository(ProductMember).findOne({
+      where: {
+        memberId: workspaceMemberId,
+        productRole: ProductRole.PRODUCT_COORDINATOR,
+      },
+    });
+
+    return {
+      canCreateProduct: !!coordinatorMembership,
     };
   }
 
