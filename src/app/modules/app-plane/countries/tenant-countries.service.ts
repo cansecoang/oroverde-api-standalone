@@ -9,6 +9,7 @@ import { DataSource } from 'typeorm';
 import { TenantConnectionService } from '../../tenancy/tenant-connection.service';
 import { GlobalCountry } from '../../control-plane/countries/entities/country.entity';
 import { Country } from '../products/entities/country.entity';
+import { AuditLog } from '../audit/entities/audit-log.entity';
 
 /**
  * Servicio de países a nivel de tenant (app-plane).
@@ -44,7 +45,7 @@ export class TenantCountriesService {
   /**
    * Agrega un país al tenant copiando sus datos desde la lista global.
    */
-  async addCountry(code: string): Promise<Country> {
+  async addCountry(code: string, actorMemberId?: string): Promise<Country> {
     const upperCode = code.toUpperCase();
 
     // 1. Buscar en la lista global
@@ -76,7 +77,21 @@ export class TenantCountriesService {
       timezone: global.timezone,
     });
 
-    return repo.save(country);
+    const saved = await repo.save(country);
+
+    try {
+      await ds.getRepository(AuditLog).save(
+        ds.getRepository(AuditLog).create({
+          actorMemberId: actorMemberId ?? null,
+          entity: 'country',
+          entityId: saved.id,
+          action: 'CREATE',
+          changes: { code: saved.id, name: saved.name },
+        }),
+      );
+    } catch { /* best-effort */ }
+
+    return saved;
   }
 
   /**
@@ -85,6 +100,7 @@ export class TenantCountriesService {
    */
   async bulkAddCountries(
     codes: string[],
+    actorMemberId?: string,
   ): Promise<{ added: string[]; skipped: string[]; notFound: string[] }> {
     const upperCodes = codes.map((c) => c.toUpperCase());
     const added: string[] = [];
@@ -112,6 +128,18 @@ export class TenantCountriesService {
         repo.create({ id: global.code, name: global.name, timezone: global.timezone }),
       );
       added.push(code);
+
+      try {
+        await ds.getRepository(AuditLog).save(
+          ds.getRepository(AuditLog).create({
+            actorMemberId: actorMemberId ?? null,
+            entity: 'country',
+            entityId: code,
+            action: 'CREATE',
+            changes: { code, name: global.name },
+          }),
+        );
+      } catch { /* best-effort */ }
     }
 
     return { added, skipped, notFound };
@@ -174,7 +202,7 @@ export class TenantCountriesService {
    * Elimina un país del tenant.
    * Falla si hay productos que lo referencian.
    */
-  async removeCountry(code: string): Promise<void> {
+  async removeCountry(code: string, actorMemberId?: string): Promise<void> {
     const upperCode = code.toUpperCase();
     const ds = await this.tenantConnection.getTenantConnection();
     const repo = ds.getRepository(Country);
@@ -199,5 +227,17 @@ export class TenantCountriesService {
     }
 
     await repo.remove(country);
+
+    try {
+      await ds.getRepository(AuditLog).save(
+        ds.getRepository(AuditLog).create({
+          actorMemberId: actorMemberId ?? null,
+          entity: 'country',
+          entityId: upperCode,
+          action: 'DELETE',
+          changes: { code: upperCode, name: country.name },
+        }),
+      );
+    } catch { /* best-effort */ }
   }
 }

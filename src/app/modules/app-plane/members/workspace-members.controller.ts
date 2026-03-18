@@ -1,7 +1,8 @@
-import { Controller, Get, Post, Body, UseGuards, Query, Req } from '@nestjs/common';
-import { ApiTags, ApiCookieAuth, ApiOperation, ApiResponse, ApiQuery } from '@nestjs/swagger';
+import { Controller, Get, Post, Patch, Body, Param, UseGuards, Query, Req, ParseUUIDPipe, HttpCode, HttpStatus } from '@nestjs/common';
+import { ApiTags, ApiCookieAuth, ApiOperation, ApiResponse, ApiQuery, ApiParam } from '@nestjs/swagger';
 import { WorkspaceMembersService } from './workspace-members.service';
 import { InviteMemberDto } from './dto/invite-member.dto';
+import { UpdateMemberDto } from './dto/update-member.dto';
 
 import { AuthenticatedGuard } from '../../../common/guards/authenticated.guard';
 import { TenantAccessGuard } from '../../../common/guards/tenant-access.guard';
@@ -35,8 +36,24 @@ export class WorkspaceMembersController {
   @ApiResponse({ status: 400, description: 'Datos inválidos' })
   @ApiResponse({ status: 401, description: 'No autenticado' })
   @ApiResponse({ status: 409, description: 'El miembro ya existe' })
-  invite(@Body() dto: InviteMemberDto) {
-    return this.service.inviteMember(dto);
+  invite(@Body() dto: InviteMemberDto, @Req() req: any) {
+    return this.service.inviteMember(dto, req.workspaceMember?.id);
+  }
+
+  @Patch(':id')
+  @RequirePermission(Permission.MEMBER_MANAGE)
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: 'Actualizar rol o alias de un miembro del workspace' })
+  @ApiParam({ name: 'id', description: 'UUID del workspace member' })
+  @ApiResponse({ status: 200, description: 'Miembro actualizado correctamente' })
+  @ApiResponse({ status: 404, description: 'Miembro no encontrado' })
+  @ApiResponse({ status: 403, description: 'Sin permisos para gestionar miembros' })
+  updateMember(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: UpdateMemberDto,
+    @Req() req: any,
+  ) {
+    return this.service.updateMember(id, dto, req.workspaceMember?.id);
   }
 
   @Get()

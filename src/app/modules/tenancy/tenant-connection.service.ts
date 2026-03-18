@@ -34,6 +34,57 @@ const idleTimer = setInterval(async () => {
 if (idleTimer.unref) idleTimer.unref();
 
 /**
+ * Helper SINGLETON-safe: obtiene (o inicializa) la DataSource del tenant por slug.
+ * Reutiliza el pool estático sin necesidad de una instancia REQUEST-scoped.
+ * Usado por AuditAdminService para queries cross-tenant.
+ */
+export async function getAppPlaneDataSourceBySlug(
+  slug: string,
+  controlPlaneDs: DataSource,
+): Promise<DataSource> {
+  const cached = dataSourcePool.get(slug);
+  if (cached?.isInitialized) {
+    lastUsed.set(slug, Date.now());
+    return cached;
+  }
+
+  const tenant = await controlPlaneDs
+    .getRepository(Tenant)
+    .findOne({ where: { slug } });
+
+  if (!tenant) {
+    throw new Error(`Tenant '${slug}' not found`);
+  }
+
+  const dbHost = process.env.DB_HOST || 'localhost';
+  const dbSslEnabled = (process.env.DB_SSL || 'false') === 'true';
+
+  const ds = new DataSource({
+    type: 'postgres',
+    host: dbHost,
+    port: parseInt(process.env.DB_PORT || '5432', 10),
+    username: process.env.DB_USER,
+    password: process.env.DB_PASS,
+    database: tenant.dbName,
+    entities: TENANT_ENTITIES,
+    synchronize: false,
+    ssl: dbSslEnabled || dbHost.includes('azure')
+      ? { rejectUnauthorized: false }
+      : false,
+    connectTimeoutMS: 10000,
+    extra: {
+      connectionTimeoutMillis: 10000,
+      query_timeout: 30000,
+    },
+  });
+
+  await ds.initialize();
+  dataSourcePool.set(slug, ds);
+  lastUsed.set(slug, Date.now());
+  return ds;
+}
+
+/**
  * M-6: Cierra TODAS las conexiones del pool (llamar en shutdown).
  */
 export async function drainTenantPool(): Promise<void> {

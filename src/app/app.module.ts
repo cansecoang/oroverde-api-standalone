@@ -16,6 +16,7 @@ import { TenantMember } from './modules/control-plane/tenants/entities/tenant-me
 import { GlobalUser } from './modules/control-plane/users/entities/user.entity';
 import { GlobalOrganization } from './modules/control-plane/organizations/entities/global-organization.entity';
 import { GlobalCountry } from './modules/control-plane/countries/entities/country.entity';
+import { GlobalAuditLog } from './modules/control-plane/audit/entities/global-audit-log.entity';
 
 // Módulos
 import { TenancyModule } from './modules/tenancy/tenancy.module';
@@ -51,7 +52,7 @@ import { TenantMiddleware } from './common/middleware/tenant.middleware';
           username: config.get<string>('DB_USER'),
           password: config.get<string>('DB_PASS'),
           database: config.get<string>('DB_NAME', 'control_plane'),
-          entities: [Tenant, GlobalUser, TenantMember, GlobalOrganization, GlobalCountry],
+          entities: [Tenant, GlobalUser, TenantMember, GlobalOrganization, GlobalCountry, GlobalAuditLog],
           autoLoadEntities: false,
           synchronize: config.get<string>('DB_SYNCHRONIZE', 'false') === 'true',
           logging: config.get<string>('DB_LOGGING', 'false') === 'true',

@@ -41,6 +41,12 @@ import { DashboardController } from './dashboard/dashboard.controller';
 import { DashboardService } from './dashboard/dashboard.service';
 import { SetupController } from './setup/setup.controller';
 import { SetupService } from './setup/setup.service';
+import { ProductRequestsController } from './product-requests/product-requests.controller';
+import { ProductRequestsService } from './product-requests/product-requests.service';
+import { ProductCreationRequest } from './product-requests/entities/product-creation-request.entity';
+import { NotificationsController } from './notifications/notifications.controller';
+import { NotificationsService } from './notifications/notifications.service';
+import { Notification } from './notifications/entities/notification.entity';
 
 @Module({
   imports: [
@@ -60,6 +66,8 @@ import { SetupService } from './setup/setup.service';
       AuditLog,
       ProjectCheckIn,
       Country,
+      ProductCreationRequest,
+      Notification,
     ]),
     CatalogsModule,
   ],
@@ -75,6 +83,8 @@ import { SetupService } from './setup/setup.service';
     TenantCountriesController,
     DashboardController,
     SetupController,
+    ProductRequestsController,
+    NotificationsController,
 ],
   providers: [
     ProductsService,
@@ -88,6 +98,8 @@ import { SetupService } from './setup/setup.service';
     TenantCountriesService,
     DashboardService,
     SetupService,
+    ProductRequestsService,
+    NotificationsService,
 ],
 })
 export class AppPlaneModule {}

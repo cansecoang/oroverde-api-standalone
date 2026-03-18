@@ -1,9 +1,10 @@
 import { BadRequestException, ConflictException, Injectable, InternalServerErrorException, Logger, NotFoundException } from '@nestjs/common';
-import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { InjectRepository, InjectDataSource } from '@nestjs/typeorm';
+import { Repository, DataSource } from 'typeorm';
 import { GlobalUser } from './entities/user.entity';
 import { GlobalOrganization } from '../organizations/entities/global-organization.entity';
 import { TenantMember } from '../tenants/entities/tenant-member.entity';
+import { GlobalAuditLog } from '../audit/entities/global-audit-log.entity';
 import { UpdateUserDto } from './dto/update-user.dto';
 import { UpdateUserStatusDto } from './dto/update-user-status.dto';
 import { UpdateUserRoleDto } from './dto/update-user-role.dto';
@@ -25,10 +26,26 @@ export class GlobalUsersService {
     private readonly orgRepo: Repository<GlobalOrganization>,
     @InjectRepository(TenantMember, 'default')
     private readonly tenantMemberRepo: Repository<TenantMember>,
+    @InjectDataSource('default')
+    private readonly controlPlaneDs: DataSource,
     private readonly mailerService: MailerService,
     private readonly sessionService: SessionService,
     private readonly eventEmitter: EventEmitter2,
   ) {}
+
+  private async writeGlobalAudit(
+    actorUserId: string | null,
+    action: string,
+    entityId: string,
+    changes: Record<string, any>,
+  ): Promise<void> {
+    try {
+      const repo = this.controlPlaneDs.getRepository(GlobalAuditLog);
+      await repo.save(repo.create({ actorUserId, action, entity: 'USER', entityId, changes }));
+    } catch (err) {
+      this.logger.error(`GlobalAuditLog write failed: ${err?.message}`, err?.stack);
+    }
+  }
 
   // Ruta ÚNICA de creación de usuarios (H-2: consolidado desde AuthService + GlobalUsersService)
   async create(email: string, firstName: string, lastName: string, orgId: string) {
@@ -86,9 +103,16 @@ export class GlobalUsersService {
         `,
       });
 
-      return { 
+      await this.writeGlobalAudit(null, 'CREATE', savedUser.id, {
+        email: savedUser.email,
+        firstName: savedUser.firstName,
+        lastName: savedUser.lastName,
+        organizationId: orgId,
+      });
+
+      return {
         message: 'User created and email sent successfully',
-        userId: savedUser.id 
+        userId: savedUser.id
       };
 
     } catch (error) {
@@ -123,7 +147,7 @@ export class GlobalUsersService {
 
   // ─── MÓDULO 2: MUTACIONES ─────────────────────────────
 
-  async update(id: string, changes: UpdateUserDto) {
+  async update(id: string, changes: UpdateUserDto, actorUserId?: string) {
     const user = await this.repo.findOne({ where: { id } });
     if (!user) throw new NotFoundException('Usuario no encontrado');
 
@@ -166,10 +190,12 @@ export class GlobalUsersService {
     });
     this.logger.log(`Evento 'user.updated' emitido para ${saved.id}`);
 
+    await this.writeGlobalAudit(actorUserId ?? null, 'UPDATE', id, { changes });
+
     return saved;
   }
 
-  async updateStatus(id: string, dto: UpdateUserStatusDto) {
+  async updateStatus(id: string, dto: UpdateUserStatusDto, actorUserId?: string) {
     const user = await this.repo.findOne({ where: { id } });
     if (!user) throw new NotFoundException('Usuario no encontrado');
 
@@ -181,6 +207,11 @@ export class GlobalUsersService {
       sessionsPurged = await this.sessionService.purgeUserSessions(id);
     }
 
+    await this.writeGlobalAudit(actorUserId ?? null, 'UPDATE', id, {
+      old: { isActive: !dto.isActive },
+      new: { isActive: dto.isActive },
+    });
+
     return {
       message: dto.isActive
         ? `Usuario '${user.email}' activado exitosamente.`
@@ -190,7 +221,7 @@ export class GlobalUsersService {
     };
   }
 
-  async remove(id: string) {
+  async remove(id: string, actorUserId?: string) {
     const user = await this.repo.findOne({ where: { id } });
     if (!user) throw new NotFoundException('Usuario no encontrado');
 
@@ -210,6 +241,11 @@ export class GlobalUsersService {
     }
 
     await this.repo.delete(id);
+
+    await this.writeGlobalAudit(actorUserId ?? null, 'DELETE', id, {
+      email: user.email,
+    });
+
     return {
       message: `Usuario '${user.email}' eliminado exitosamente.`,
       deletedId: id,
@@ -245,6 +281,11 @@ export class GlobalUsersService {
     }
 
     this.logger.log(`Rol de '${user.email}' cambiado: ${previousRole} → ${dto.globalRole}`);
+
+    await this.writeGlobalAudit(requesterId, 'UPDATE', id, {
+      old: { globalRole: previousRole },
+      new: { globalRole: dto.globalRole },
+    });
 
     return {
       message: `Rol de '${saved.email}' actualizado de '${previousRole}' a '${dto.globalRole}'.`,

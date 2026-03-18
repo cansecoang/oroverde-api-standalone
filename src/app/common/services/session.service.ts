@@ -1,6 +1,13 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { createClient } from 'redis';
 
+export interface RawSessionData {
+  sessionId: string;
+  userId: string | null;
+  expiresAt: string | null;
+  ttlSeconds: number;
+}
+
 @Injectable()
 export class SessionService {
   private readonly logger = new Logger(SessionService.name);
@@ -62,6 +69,94 @@ export class SessionService {
         err,
       );
       return 0;
+    } finally {
+      await client.quit().catch(() => {});
+    }
+  }
+
+  /**
+   * Escanea Redis y devuelve todas las sesiones activas (con o sin usuario autenticado).
+   */
+  async getActiveSessions(): Promise<RawSessionData[]> {
+    const client = this.buildRedisClient();
+    if (!client) {
+      this.logger.warn('Redis no configurado — getActiveSessions devuelve vacío');
+      return [];
+    }
+
+    try {
+      await client.connect();
+    } catch (err) {
+      this.logger.error('No se pudo conectar a Redis para listar sesiones', err);
+      return [];
+    }
+
+    const results: RawSessionData[] = [];
+
+    try {
+      let cursor = 0;
+
+      do {
+        const scan = await client.scan(cursor, { MATCH: 'saas_sess:*', COUNT: 100 });
+        cursor = scan.cursor;
+
+        for (const key of scan.keys) {
+          try {
+            const [raw, ttl] = await Promise.all([client.get(key), client.ttl(key)]);
+            if (!raw) continue;
+
+            const session = JSON.parse(raw);
+            const userId: string | null = session?.passport?.user?.id ?? null;
+            const expiresAt: string | null = session?.cookie?.expires ?? null;
+            const sessionId = key.slice('saas_sess:'.length);
+
+            results.push({ sessionId, userId, expiresAt, ttlSeconds: ttl });
+          } catch {
+            // sesión con formato inválido — ignorar
+          }
+        }
+      } while (cursor !== 0);
+
+      return results;
+    } finally {
+      await client.quit().catch(() => {});
+    }
+  }
+
+  /**
+   * Elimina una sesión específica de Redis por su ID (sin el prefijo).
+   * Devuelve true si existía y fue eliminada.
+   */
+  async revokeSession(sessionId: string): Promise<boolean> {
+    const client = this.buildRedisClient();
+    if (!client) return false;
+
+    try {
+      await client.connect();
+      const deleted = await client.del(`saas_sess:${sessionId}`);
+      this.logger.log(`Sesión ${sessionId} revocada (deleted=${deleted})`);
+      return deleted > 0;
+    } catch (err) {
+      this.logger.error(`Error revocando sesión ${sessionId}`, err);
+      return false;
+    } finally {
+      await client.quit().catch(() => {});
+    }
+  }
+
+  /**
+   * Verifica si la conexión a Redis está disponible.
+   */
+  async isRedisAvailable(): Promise<boolean> {
+    const client = this.buildRedisClient();
+    if (!client) return false;
+
+    try {
+      await client.connect();
+      await client.ping();
+      return true;
+    } catch {
+      return false;
     } finally {
       await client.quit().catch(() => {});
     }

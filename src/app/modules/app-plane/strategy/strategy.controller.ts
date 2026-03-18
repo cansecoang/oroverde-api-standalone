@@ -22,8 +22,8 @@ export class StrategyController {
   constructor(private readonly service: StrategyService) {}
 
   @Post('outputs')
-  @RequirePermission(Permission.STRATEGY_WRITE)
-  @ApiOperation({ summary: 'Crear output estratégico' })
+  @RequirePermission(Permission.STRATEGY_GLOBAL_WRITE)
+  @ApiOperation({ summary: 'Crear output estratégico (solo Coordinador General)' })
   @ApiResponse({ status: 201, description: 'Output creado exitosamente' })
   @ApiResponse({ status: 400, description: 'Datos inválidos' })
   @ApiResponse({ status: 401, description: 'No autenticado' })
@@ -32,8 +32,8 @@ export class StrategyController {
   }
 
   @Post('indicators')
-  @RequirePermission(Permission.STRATEGY_WRITE)
-  @ApiOperation({ summary: 'Crear indicador' })
+  @RequirePermission(Permission.STRATEGY_GLOBAL_WRITE)
+  @ApiOperation({ summary: 'Crear indicador estratégico (solo Coordinador General)' })
   @ApiResponse({ status: 201, description: 'Indicador creado exitosamente' })
   @ApiResponse({ status: 400, description: 'Datos inválidos' })
   @ApiResponse({ status: 401, description: 'No autenticado' })

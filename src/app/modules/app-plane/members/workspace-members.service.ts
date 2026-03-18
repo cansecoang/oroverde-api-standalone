@@ -12,9 +12,12 @@ import { Tenant } from '../../control-plane/tenants/entities/tenant.entity';
 // Entidades Locales
 import { WorkspaceMember } from './entities/workspace-member.entity';
 import { WorkspaceOrganization } from '../organizations/entities/workspace-organization.entity';
+import { AuditLog } from '../audit/entities/audit-log.entity';
 
 // DTO
 import { InviteMemberDto } from './dto/invite-member.dto';
+import { UpdateMemberDto } from './dto/update-member.dto';
+import { NotificationsService } from '../notifications/notifications.service';
 
 @Injectable({ scope: Scope.REQUEST })
 export class WorkspaceMembersService {
@@ -24,10 +27,11 @@ export class WorkspaceMembersService {
     private readonly tenantConnection: TenantConnectionService,
     @InjectDataSource('default') private readonly globalDS: DataSource, // Conexión al Control Plane
     @Inject(REQUEST) private readonly request: any,
+    private readonly notifications: NotificationsService,
   ) {}
 
   // 🚀 LÓGICA CORE: INVITAR
-  async inviteMember(dto: InviteMemberDto) {
+  async inviteMember(dto: InviteMemberDto, actorMemberId?: string) {
     // 1. Buscar al Usuario Global + Su Organización Maestra
     const globalUser = await this.globalDS.getRepository(GlobalUser).findOne({
       where: { email: dto.email },
@@ -100,6 +104,16 @@ export class WorkspaceMembersService {
 
     const saved = await memberRepo.save(newMember);
 
+    // Best-effort: notify the invited member
+    void this.notifications.createNotification(
+      tenantDS,
+      saved.id,
+      'WORKSPACE_MEMBER_INVITED',
+      'Fuiste invitado a un workspace',
+      `Fuiste invitado al workspace como ${dto.role}.`,
+      { metadata: { role: dto.role } },
+    );
+
     // 6. Registrar en tenant_members (Control Plane) para que getMyWorkspaces() lo encuentre
     const tenantSlug = this.request.tenantId; // Header: x-tenant-id
     const tenant = await this.globalDS.getRepository(Tenant).findOne({ where: { slug: tenantSlug } });
@@ -121,11 +135,65 @@ export class WorkspaceMembersService {
       this.logger.warn(`⚠️ No se encontró el tenant "${tenantSlug}" en Control Plane para registrar en tenant_members`);
     }
 
+    // Audit: record workspace member invitation
+    try {
+      const auditRepo = tenantDS.getRepository(AuditLog);
+      await auditRepo.save(auditRepo.create({
+        actorMemberId: actorMemberId ?? null,
+        entity: 'workspace_member',
+        entityId: saved.id,
+        action: 'CREATE',
+        changes: {
+          email: saved.email,
+          tenantRole: saved.tenantRole,
+          organizationId: saved.organizationId,
+        },
+      }));
+    } catch (err) {
+      this.logger.error(`AuditLog write failed for inviteMember: ${err?.message}`);
+    }
+
     return saved;
   }
 
   // Sentinel UUID must match SUPER_ADMIN_SENTINEL_ID in tenant-access.guard.ts
   private static readonly SUPER_ADMIN_SENTINEL_ID = '00000000-0000-0000-0000-000000000000';
+
+  // ✏️ ACTUALIZAR ROL / ALIAS
+  async updateMember(id: string, dto: UpdateMemberDto, actorMemberId?: string): Promise<WorkspaceMember> {
+    const tenantDS = await this.tenantConnection.getTenantConnection();
+    const repo = tenantDS.getRepository(WorkspaceMember);
+
+    const member = await repo.findOne({ where: { id }, relations: ['organization'] });
+    if (!member) {
+      throw new NotFoundException(`No se encontró el miembro '${id}' en este workspace.`);
+    }
+
+    const oldRole = member.tenantRole;
+    const oldAlias = member.alias;
+
+    if (dto.role !== undefined) member.tenantRole = dto.role;
+    if (dto.alias !== undefined) member.alias = dto.alias;
+
+    const saved = await repo.save(member);
+
+    try {
+      await tenantDS.getRepository(AuditLog).save(
+        tenantDS.getRepository(AuditLog).create({
+          actorMemberId: actorMemberId ?? null,
+          entity: 'workspace_member',
+          entityId: saved.id,
+          action: 'UPDATE',
+          changes: {
+            role:  { from: oldRole,  to: saved.tenantRole },
+            alias: { from: oldAlias, to: saved.alias },
+          },
+        }),
+      );
+    } catch { /* best-effort */ }
+
+    return saved;
+  }
 
   // 🔍 PERFIL PROPIO
   async findMyProfile(userId: string) {

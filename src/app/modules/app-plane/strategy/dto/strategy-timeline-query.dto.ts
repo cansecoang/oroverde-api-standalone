@@ -42,4 +42,17 @@ export class StrategyTimelineQueryDto {
   @Transform(({ value }) => (typeof value === 'string' ? value.trim() : value))
   @IsOptional()
   search?: string;
+
+  @ApiPropertyOptional({
+    description: 'Clave de custom field catalogo para agrupar indicadores en timeline',
+    example: 'workpackage',
+  })
+  @IsString()
+  @Length(1, 64, { message: 'groupByCatalogFieldKey debe tener entre 1 y 64 caracteres' })
+  @Matches(/^[a-zA-Z_][a-zA-Z0-9_-]*$/, {
+    message: 'groupByCatalogFieldKey tiene un formato invalido',
+  })
+  @Transform(({ value }) => (typeof value === 'string' ? value.trim() : value))
+  @IsOptional()
+  groupByCatalogFieldKey?: string;
 }

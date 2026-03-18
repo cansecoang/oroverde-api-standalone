@@ -1,4 +1,4 @@
-import { Controller, Post, Body, Get, Query, UseGuards } from '@nestjs/common';
+import { Controller, Post, Patch, Body, Get, Param, Query, UseGuards, ParseUUIDPipe, Request } from '@nestjs/common';
 import { ApiTags, ApiCookieAuth, ApiOperation, ApiResponse, ApiQuery } from '@nestjs/swagger';
 import { OrganizationsService } from './organizations.service';
 import { AuthenticatedGuard } from '../../../common/guards/authenticated.guard';
@@ -9,6 +9,7 @@ import { Permission } from '../../../common/enums/business-roles.enum';
 // DTOs
 import { CreateWorkspaceOrganizationDto } from './dto/create-workspace-organization.dto';
 import { LinkGlobalOrganizationDto } from './dto/link-global-organization.dto';
+import { UpdateWorkspaceOrganizationDto } from './dto/update-workspace-organization.dto';
 
 @ApiTags('Organizations')
 @ApiCookieAuth()
@@ -48,6 +49,20 @@ export class OrganizationsController {
   @ApiResponse({ status: 401, description: 'No autenticado' })
   create(@Body() dto: CreateWorkspaceOrganizationDto) {
     return this.service.createManual(dto);
+  }
+
+  // --- ✏️ ACTUALIZAR ORGANIZACIÓN ---
+  @Patch(':id')
+  @RequirePermission(Permission.ORGANIZATION_MANAGE)
+  @ApiOperation({ summary: 'Actualizar organización del workspace' })
+  @ApiResponse({ status: 200, description: 'Organización actualizada' })
+  @ApiResponse({ status: 404, description: 'Organización no encontrada' })
+  update(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: UpdateWorkspaceOrganizationDto,
+    @Request() req,
+  ) {
+    return this.service.update(id, dto, req.workspaceMember?.id);
   }
 
   // --- 📂 LISTADO LOCAL (Para Dropdowns en Proyectos) ---

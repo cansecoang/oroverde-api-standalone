@@ -107,18 +107,46 @@ export class HybridPermissionsGuard implements CanActivate {
       request.query?.productId;
 
     if (!productId) {
+      const tenantDataSource = await this.tenantConnectionService.getTenantConnection();
+      const productMemberRepo = tenantDataSource.getRepository(this.productMemberEntity);
+
       // Global product writes (create product) are allowed for users that are
       // already product coordinators in at least one existing product.
       if (requiredPermission === Permission.PRODUCT_WRITE) {
-        const tenantDataSource = await this.tenantConnectionService.getTenantConnection();
-        const coordinatorMembership = (await tenantDataSource
-          .getRepository(this.productMemberEntity)
-          .findOne({
-            where: {
-              memberId: workspaceMember.id,
-              productRole: ProductRole.PRODUCT_COORDINATOR,
-            },
-          } as any)) as IProductMember | null;
+        const coordinatorMembership = (await productMemberRepo.findOne({
+          where: {
+            memberId: workspaceMember.id,
+            productRole: ProductRole.PRODUCT_COORDINATOR,
+          },
+        } as any)) as IProductMember | null;
+
+        if (coordinatorMembership) {
+          return true;
+        }
+      }
+
+      // Product creation requests: DEVELOPER_WORKER in any product can submit requests.
+      if (requiredPermission === Permission.PRODUCT_REQUEST_WRITE) {
+        const workerMembership = (await productMemberRepo.findOne({
+          where: {
+            memberId: workspaceMember.id,
+            productRole: ProductRole.DEVELOPER_WORKER,
+          },
+        } as any)) as IProductMember | null;
+
+        if (workerMembership) {
+          return true;
+        }
+      }
+
+      // Product request review: PRODUCT_COORDINATOR in any product can review requests.
+      if (requiredPermission === Permission.PRODUCT_REQUEST_REVIEW) {
+        const coordinatorMembership = (await productMemberRepo.findOne({
+          where: {
+            memberId: workspaceMember.id,
+            productRole: ProductRole.PRODUCT_COORDINATOR,
+          },
+        } as any)) as IProductMember | null;
 
         if (coordinatorMembership) {
           return true;

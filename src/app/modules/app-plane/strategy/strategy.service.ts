@@ -10,6 +10,7 @@ import { AssignStrategyDto } from './dto/assign-strategy.dto';
 import { ReportProgressDto } from './dto/report-progress.dto';
 import { StrategyTimelineQueryDto } from './dto/strategy-timeline-query.dto';
 import {
+  StrategyTimelineGroupByFieldDto,
   StrategyTimelineIndicatorDto,
   StrategyTimelineIndicatorOptionDto,
   StrategyTimelineOutputOptionDto,
@@ -18,6 +19,7 @@ import {
   StrategyTimelineTaskDto,
   StrategyTimelineWorkpackageDto,
 } from './dto/strategy-timeline-response.dto';
+import { ProductFieldDefinition } from '../field-definitions/entities/product-field-definition.entity';
 
 interface StrategyTimelineAssignmentRow {
   output_id: string | null;
@@ -31,6 +33,8 @@ interface StrategyTimelineAssignmentRow {
   indicator_total_target: number | string | null;
   indicator_planned_completion_date: string | Date | null;
   indicator_actual_completion_date: string | Date | null;
+  total_tasks: number | string | null;
+  completed_tasks: number | string | null;
   committed_target: number | string | null;
   reported_progress: number | string | null;
   product_id: string;
@@ -41,6 +45,8 @@ interface StrategyTimelineAssignmentRow {
   workpackage_id: string | null;
   workpackage_name: string | null;
   workpackage_code: string | null;
+  group_by_catalog_item_id: string | null;
+  group_by_catalog_item_name: string | null;
 }
 
 interface StrategyTimelineTaskRow {
@@ -52,6 +58,7 @@ interface StrategyTimelineTaskRow {
   actual_start: string | Date | null;
   actual_end: string | Date | null;
   status_name: string | null;
+  is_completed: boolean | number | string | null;
   phase_name: string | null;
   assignee_name: string | null;
   assignee_email: string | null;
@@ -202,7 +209,33 @@ export class StrategyService {
     const dataSource = await this.tenantConnection.getTenantConnection();
     const tenantDateWindow = await this.tenantConnection.getCurrentTenantDateWindow();
     const workpackageKey = (query.workpackageKey || 'workpackage').trim() || 'workpackage';
+    const groupByCatalogFieldKey = query.groupByCatalogFieldKey?.trim() || null;
     const completedTaskPredicate = this.completedTaskPredicateSql('st_task');
+
+    let groupByFieldDefinition: ProductFieldDefinition | null = null;
+    if (groupByCatalogFieldKey) {
+      groupByFieldDefinition = await dataSource.getRepository(ProductFieldDefinition).findOne({
+        where: { key: groupByCatalogFieldKey },
+      });
+
+      if (!groupByFieldDefinition) {
+        throw new BadRequestException(
+          `groupByCatalogFieldKey '${groupByCatalogFieldKey}' no es un campo valido para este tenant.`,
+        );
+      }
+
+      if (groupByFieldDefinition.type !== 'CATALOG_REF') {
+        throw new BadRequestException(
+          `groupByCatalogFieldKey '${groupByCatalogFieldKey}' debe ser de tipo CATALOG_REF.`,
+        );
+      }
+
+      if (!groupByFieldDefinition.linkedCatalogId) {
+        throw new BadRequestException(
+          `groupByCatalogFieldKey '${groupByCatalogFieldKey}' no tiene un catalogo vinculado.`,
+        );
+      }
+    }
 
     const params: unknown[] = [workpackageKey];
     const whereFragments: string[] = [];
@@ -233,6 +266,18 @@ export class StrategyService {
       ? `WHERE ${whereFragments.join(' AND ')}`
       : '';
 
+    let groupBySelectFragment = 'NULL::uuid AS group_by_catalog_item_id, NULL::text AS group_by_catalog_item_name';
+    let groupByJoinFragment = '';
+
+    if (groupByFieldDefinition) {
+      const groupByFieldParam = `$${paramIndex++}`;
+      params.push(groupByFieldDefinition.id);
+      groupBySelectFragment = 'ci_group.id AS group_by_catalog_item_id, ci_group.name AS group_by_catalog_item_name';
+      groupByJoinFragment = `
+       LEFT JOIN product_custom_values pcv_group ON pcv_group.product_id = p.id AND pcv_group.field_id = ${groupByFieldParam}
+       LEFT JOIN catalog_items ci_group ON ci_group.id = pcv_group.value_catalog_id`;
+    }
+
     const assignments = await dataSource.query<StrategyTimelineAssignmentRow[]>(
       `SELECT
          so.id AS output_id,
@@ -246,6 +291,8 @@ export class StrategyService {
          si.total_target AS indicator_total_target,
          si.planned_completion_date AS indicator_planned_completion_date,
          si.actual_completion_date AS indicator_actual_completion_date,
+         COALESCE(task_progress.total_tasks, 0) AS total_tasks,
+         COALESCE(task_progress.completed_tasks, 0) AS completed_tasks,
          ps.committed_target AS committed_target,
          COALESCE(task_progress.completed_tasks, 0) AS reported_progress,
          p.id AS product_id,
@@ -255,7 +302,8 @@ export class StrategyService {
          c.name AS country_name,
          ci_wp.id AS workpackage_id,
          COALESCE(ci_wp.name, pcv_wp.value_text, 'Unassigned') AS workpackage_name,
-         ci_wp.code AS workpackage_code
+         ci_wp.code AS workpackage_code,
+         ${groupBySelectFragment}
        FROM product_strategies ps
        JOIN strategic_indicators si ON ps.indicator_id = si.id
        LEFT JOIN strategic_outputs so ON si.output_id = so.id
@@ -265,6 +313,7 @@ export class StrategyService {
        LEFT JOIN product_field_definitions pfd_wp ON pfd_wp.key = $1
        LEFT JOIN product_custom_values pcv_wp ON pcv_wp.product_id = p.id AND pcv_wp.field_id = pfd_wp.id
        LEFT JOIN catalog_items ci_wp ON ci_wp.id = pcv_wp.value_catalog_id
+       ${groupByJoinFragment}
        LEFT JOIN (
          SELECT
            t.product_id,
@@ -294,6 +343,7 @@ export class StrategyService {
              t.actual_start_date AS actual_start,
              t.actual_end_date AS actual_end,
              st.name AS status_name,
+             CASE WHEN ${this.completedTaskPredicateSql('st')} THEN TRUE ELSE FALSE END AS is_completed,
              ph.name AS phase_name,
              wm.full_name AS assignee_name,
              wm.email AS assignee_email
@@ -310,6 +360,7 @@ export class StrategyService {
 
     const tasksByProduct = new Map<string, StrategyTimelineTaskDto[]>();
     let unscheduledTaskCount = 0;
+    let completedTaskCount = 0;
     const uniqueTaskIds = new Set<string>();
 
     for (const row of tasks) {
@@ -338,6 +389,10 @@ export class StrategyService {
       tasksByProduct.get(row.product_id)?.push(taskVm);
       uniqueTaskIds.add(taskVm.id);
 
+      if (this.toBoolean(row.is_completed)) {
+        completedTaskCount += 1;
+      }
+
       if (!plannedStart || !plannedEnd) {
         unscheduledTaskCount += 1;
       }
@@ -355,6 +410,9 @@ export class StrategyService {
     const indicatorsMap = new Map<string, StrategyTimelineIndicatorDto>();
     const workpackageMapByIndicator = new Map<string, Map<string, StrategyTimelineWorkpackageDto>>();
     const uniqueProductIds = new Set<string>();
+    const indicatorGroupValues = new Map<string, Map<string, { id: string; name: string; productIds: Set<string> }>>();
+    const indicatorProductsWithoutGroup = new Map<string, Set<string>>();
+    const indicatorProductSeenForGrouping = new Map<string, Set<string>>();
 
     for (const row of assignments) {
       if (row.output_id) {
@@ -387,6 +445,8 @@ export class StrategyService {
           totalTarget: this.toNumber(row.indicator_total_target),
           committedTotal: 0,
           reportedTotal: 0,
+          totalTasks: 0,
+          completedTasks: 0,
           progressPercent: 0,
           indicatorPlannedCompletionDate: this.normalizeDate(row.indicator_planned_completion_date),
           indicatorActualCompletionDate: this.normalizeDate(row.indicator_actual_completion_date),
@@ -394,8 +454,49 @@ export class StrategyService {
           plannedEnd: null,
           actualStart: null,
           actualEnd: null,
+          groupByCatalogItemId: null,
+          groupByCatalogItemName: null,
           workpackages: [],
         });
+      }
+
+      if (groupByFieldDefinition) {
+        if (!indicatorProductSeenForGrouping.has(row.indicator_id)) {
+          indicatorProductSeenForGrouping.set(row.indicator_id, new Set<string>());
+        }
+
+        const seenProducts = indicatorProductSeenForGrouping.get(row.indicator_id);
+        const productWasAlreadyProcessed = seenProducts?.has(row.product_id) ?? false;
+
+        if (!productWasAlreadyProcessed) {
+          seenProducts?.add(row.product_id);
+
+          const groupItemId = this.normalizeOptionalText(row.group_by_catalog_item_id);
+          const groupItemName = this.normalizeOptionalText(row.group_by_catalog_item_name);
+
+          if (groupItemId && groupItemName) {
+            if (!indicatorGroupValues.has(row.indicator_id)) {
+              indicatorGroupValues.set(row.indicator_id, new Map());
+            }
+
+            const groupsForIndicator = indicatorGroupValues.get(row.indicator_id);
+            if (!groupsForIndicator?.has(groupItemId)) {
+              groupsForIndicator?.set(groupItemId, {
+                id: groupItemId,
+                name: groupItemName,
+                productIds: new Set<string>(),
+              });
+            }
+
+            groupsForIndicator?.get(groupItemId)?.productIds.add(row.product_id);
+          } else {
+            if (!indicatorProductsWithoutGroup.has(row.indicator_id)) {
+              indicatorProductsWithoutGroup.set(row.indicator_id, new Set<string>());
+            }
+
+            indicatorProductsWithoutGroup.get(row.indicator_id)?.add(row.product_id);
+          }
+        }
       }
 
       if (!workpackageMapByIndicator.has(row.indicator_id)) {
@@ -416,6 +517,8 @@ export class StrategyService {
           actualEnd: null,
           committedTotal: 0,
           reportedTotal: 0,
+          totalTasks: 0,
+          completedTasks: 0,
           progressPercent: 0,
           products: [],
         });
@@ -427,6 +530,8 @@ export class StrategyService {
       }
 
       const committedTarget = this.toNumber(row.committed_target);
+      const totalTasks = this.toNumber(row.total_tasks);
+      const completedTasks = this.toNumber(row.completed_tasks);
       const reportedProgress = this.toNumber(row.reported_progress);
 
       const productVm: StrategyTimelineProductDto = {
@@ -441,7 +546,9 @@ export class StrategyService {
         actualEnd: null,
         committedTarget,
         reportedProgress,
-        progressPercent: committedTarget > 0 ? (reportedProgress / committedTarget) * 100 : 0,
+        totalTasks,
+        completedTasks,
+        progressPercent: totalTasks > 0 ? (completedTasks / totalTasks) * 100 : 0,
         tasks: tasksByProduct.get(row.product_id) ?? [],
       };
 
@@ -456,6 +563,29 @@ export class StrategyService {
     }
 
     const timeline = Array.from(indicatorsMap.values());
+
+    if (groupByFieldDefinition) {
+      for (const indicator of timeline) {
+        const groupsForIndicator = indicatorGroupValues.get(indicator.indicatorId);
+        const groupValues = groupsForIndicator ? [...groupsForIndicator.values()] : [];
+        const productsWithoutGroupCount = indicatorProductsWithoutGroup.get(indicator.indicatorId)?.size ?? 0;
+
+        if (groupValues.length === 1 && productsWithoutGroupCount === 0) {
+          indicator.groupByCatalogItemId = groupValues[0].id;
+          indicator.groupByCatalogItemName = groupValues[0].name;
+          continue;
+        }
+
+        if (groupValues.length === 0) {
+          indicator.groupByCatalogItemId = '__ungrouped__';
+          indicator.groupByCatalogItemName = 'Sin valor';
+          continue;
+        }
+
+        indicator.groupByCatalogItemId = '__mixed__';
+        indicator.groupByCatalogItemName = 'Mixto';
+      }
+    }
 
     for (const indicator of timeline) {
       const workpackageMap = workpackageMapByIndicator.get(indicator.indicatorId);
@@ -472,8 +602,16 @@ export class StrategyService {
           (sum, product) => sum + product.reportedProgress,
           0,
         );
-        workpackage.progressPercent = workpackage.committedTotal > 0
-          ? (workpackage.reportedTotal / workpackage.committedTotal) * 100
+        workpackage.totalTasks = workpackage.products.reduce(
+          (sum, product) => sum + product.totalTasks,
+          0,
+        );
+        workpackage.completedTasks = workpackage.products.reduce(
+          (sum, product) => sum + product.completedTasks,
+          0,
+        );
+        workpackage.progressPercent = workpackage.totalTasks > 0
+          ? (workpackage.completedTasks / workpackage.totalTasks) * 100
           : 0;
 
         const workpackageRange = this.computeRangeFromProducts(workpackage.products);
@@ -491,8 +629,10 @@ export class StrategyService {
       indicator.workpackages = workpackages;
       indicator.committedTotal = workpackages.reduce((sum, item) => sum + item.committedTotal, 0);
       indicator.reportedTotal = workpackages.reduce((sum, item) => sum + item.reportedTotal, 0);
-      indicator.progressPercent = indicator.totalTarget > 0
-        ? (indicator.reportedTotal / indicator.totalTarget) * 100
+      indicator.totalTasks = workpackages.reduce((sum, item) => sum + item.totalTasks, 0);
+      indicator.completedTasks = workpackages.reduce((sum, item) => sum + item.completedTasks, 0);
+      indicator.progressPercent = indicator.totalTasks > 0
+        ? (indicator.completedTasks / indicator.totalTasks) * 100
         : 0;
 
       const indicatorRange = this.computeRangeFromWorkpackages(
@@ -507,7 +647,10 @@ export class StrategyService {
     }
 
     timeline.sort((a, b) =>
-      (a.outputOrder - b.outputOrder)
+      (groupByFieldDefinition
+        ? this.compareCode(a.groupByCatalogItemName ?? 'Sin valor', b.groupByCatalogItemName ?? 'Sin valor')
+        : 0)
+      || (a.outputOrder - b.outputOrder)
       || this.compareCode(a.outputCode, b.outputCode)
       || this.compareCode(a.indicatorCode, b.indicatorCode),
     );
@@ -528,11 +671,19 @@ export class StrategyService {
       0,
     );
 
+    const groupByField: StrategyTimelineGroupByFieldDto | null = groupByFieldDefinition
+      ? {
+          key: groupByFieldDefinition.key,
+          label: groupByFieldDefinition.label,
+        }
+      : null;
+
     return {
       generatedAt: new Date().toISOString(),
       workpackageKey,
       tenantStartDate: this.normalizeDate(tenantDateWindow.startDate),
       tenantEndDate: this.normalizeDate(tenantDateWindow.endDate),
+      groupByField,
       outputs,
       indicators,
       timeline,
@@ -541,6 +692,10 @@ export class StrategyService {
         workpackageCount,
         productCount: uniqueProductIds.size,
         taskCount: uniqueTaskIds.size,
+        completedTaskCount,
+        taskCompletionPercent: uniqueTaskIds.size > 0
+          ? (completedTaskCount / uniqueTaskIds.size) * 100
+          : 0,
         unscheduledTaskCount,
       },
     };
@@ -732,6 +887,23 @@ export class StrategyService {
   private toNumber(value: unknown): number {
     const parsed = Number(value);
     return Number.isFinite(parsed) ? parsed : 0;
+  }
+
+  private toBoolean(value: unknown): boolean {
+    if (typeof value === 'boolean') {
+      return value;
+    }
+
+    if (typeof value === 'number') {
+      return value !== 0;
+    }
+
+    if (typeof value === 'string') {
+      const normalized = value.trim().toLowerCase();
+      return normalized === 'true' || normalized === 't' || normalized === '1' || normalized === 'yes';
+    }
+
+    return false;
   }
 
   private async getProductTaskProgress(dataSource: any, productId: string): Promise<ProductTaskProgress> {

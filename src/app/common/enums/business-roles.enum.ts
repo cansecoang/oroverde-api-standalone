@@ -40,6 +40,10 @@ export enum Permission {
   PRODUCT_READ = 'product:read',         // listar / ver productos
   PRODUCT_UPDATE = 'product:update',     // modificar producto
 
+  // --- Solicitudes de Creación de Producto ---
+  PRODUCT_REQUEST_WRITE = 'product_request:write',   // DEVELOPER_WORKER envía solicitud de creación
+  PRODUCT_REQUEST_REVIEW = 'product_request:review', // GC / PC revisa solicitudes
+
   // --- Miembros de Producto ---
   PRODUCT_MEMBER_MANAGE = 'product_member:manage',  // agregar/quitar miembros de producto
   PRODUCT_MEMBER_READ = 'product_member:read',       // ver equipo de producto
@@ -53,7 +57,8 @@ export enum Permission {
   TASK_DELETE = 'task:delete',              // eliminar tarea
 
   // --- Strategy ---
-  STRATEGY_WRITE = 'strategy:write',   // crear outputs, indicadores, asignar, reportar avance
+  STRATEGY_GLOBAL_WRITE = 'strategy:global_write', // crear outputs e indicadores (solo GENERAL_COORDINATOR)
+  STRATEGY_WRITE = 'strategy:write',   // asignar indicador a producto, reportar avance, actualizar meta
   STRATEGY_READ = 'strategy:read',     // ver árbol estratégico
 
   // --- Check-ins ---
@@ -91,6 +96,8 @@ export const ProductACL: Record<ProductRole, Permission[]> = {
     // Producto
     Permission.PRODUCT_READ,
     Permission.PRODUCT_UPDATE,
+    // Solicitudes de creación
+    Permission.PRODUCT_REQUEST_REVIEW,
     // Miembros de producto
     Permission.PRODUCT_MEMBER_MANAGE,
     Permission.PRODUCT_MEMBER_READ,
@@ -115,6 +122,8 @@ export const ProductACL: Record<ProductRole, Permission[]> = {
     Permission.TASK_UPDATE_STATUS,
     Permission.STRATEGY_READ,
     Permission.CHECKIN_READ,
+    // Solicitudes de creación
+    Permission.PRODUCT_REQUEST_WRITE,
   ],
   [ProductRole.VIEWER]: [
     Permission.PRODUCT_READ,

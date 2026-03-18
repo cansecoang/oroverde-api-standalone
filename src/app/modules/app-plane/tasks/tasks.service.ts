@@ -2,10 +2,13 @@ import { Injectable, Scope, NotFoundException, BadRequestException, ForbiddenExc
 import { TenantConnectionService } from '../../tenancy/tenant-connection.service';
 import { Task } from './entities/task.entity';
 import { ProductMember } from '../products/entities/product-member.entity';
+import { Product } from '../products/entities/product.entity';
 import { WorkspaceOrganization } from '../organizations/entities/workspace-organization.entity';
+import { AuditLog } from '../audit/entities/audit-log.entity';
 import { CreateTaskDto } from './dto/create-task.dto';
 import { UpdateTaskStatusDto } from './dto/update-task-status.dto';
 import { TenantRole } from '../../../common/enums/business-roles.enum';
+import { NotificationsService } from '../notifications/notifications.service';
 
 const SUPER_ADMIN_SENTINEL_ID = '00000000-0000-0000-0000-000000000000';
 
@@ -16,9 +19,12 @@ type TaskActorContext = {
 
 @Injectable({ scope: Scope.REQUEST })
 export class TasksService {
-  constructor(private readonly tenantConnection: TenantConnectionService) {}
+  constructor(
+    private readonly tenantConnection: TenantConnectionService,
+    private readonly notifications: NotificationsService,
+  ) {}
 
-  async create(dto: CreateTaskDto) {
+  async create(dto: CreateTaskDto, actor?: TaskActorContext) {
     const ds = await this.tenantConnection.getTenantConnection();
     const repo = ds.getRepository(Task);
 
@@ -31,14 +37,55 @@ export class TasksService {
 
     const task = repo.create(dto);
     const saved = await repo.save(task);
-    return this.findOneWithRelations(ds, saved.id);
+
+    const qr = ds.createQueryRunner();
+    await qr.connect();
+    await qr.startTransaction();
+    try {
+      const auditLog = qr.manager.create(AuditLog, {
+        actorMemberId: actor?.workspaceMemberId ?? null,
+        entity: 'task',
+        entityId: saved.id,
+        action: 'CREATE',
+        changes: { title: saved.title, productId: saved.productId },
+      });
+      await qr.manager.save(AuditLog, auditLog);
+      await qr.commitTransaction();
+    } catch {
+      await qr.rollbackTransaction();
+    } finally {
+      await qr.release();
+    }
+
+    const result = await this.findOneWithRelations(ds, saved.id);
+
+    // Best-effort: notify the assignee if one was set
+    if (saved.assigneeMemberId) {
+      const pm = await ds.getRepository(ProductMember).findOne({
+        where: { id: saved.assigneeMemberId },
+        select: ['memberId'],
+      });
+      if (pm?.memberId) {
+        const product = await ds.getRepository(Product).findOne({ where: { id: saved.productId }, select: ['name'] });
+        const productName = product?.name ?? saved.productId;
+        void this.notifications.createNotification(
+          ds,
+          pm.memberId,
+          'TASK_ASSIGNED',
+          'Se te asignó una tarea',
+          `Se te asignó la tarea "${saved.title}" en el producto "${productName}".`,
+          { entityType: 'TASK', entityId: saved.id, metadata: { taskTitle: saved.title, productName, productId: saved.productId } },
+        );
+      }
+    }
+
+    return result;
   }
 
   async updateStatus(id: string, dto: UpdateTaskStatusDto, actor?: TaskActorContext) {
     const ds = await this.tenantConnection.getTenantConnection();
-    const repo = ds.getRepository(Task);
 
-    const task = await repo.findOne({ where: { id } });
+    const task = await ds.getRepository(Task).findOne({ where: { id } });
     if (!task) throw new NotFoundException('Tarea no encontrada');
 
     // IDOR: verify caller has membership in the task's product (except coordinator/superadmin)
@@ -46,9 +93,37 @@ export class TasksService {
       await this.verifyProductAccess(ds, task.productId, actor.workspaceMemberId);
     }
 
-    task.statusId = dto.statusId;
-    const saved = await repo.save(task);
-    return this.findOneWithRelations(ds, saved.id);
+    const previousStatusId = task.statusId;
+
+    const queryRunner = ds.createQueryRunner();
+    await queryRunner.connect();
+    await queryRunner.startTransaction();
+
+    try {
+      task.statusId = dto.statusId;
+      await queryRunner.manager.save(Task, task);
+
+      const auditLog = queryRunner.manager.create(AuditLog, {
+        actorMemberId: actor?.workspaceMemberId ?? null,
+        entity: 'task',
+        entityId: id,
+        action: 'UPDATE',
+        changes: {
+          old: { statusId: previousStatusId },
+          new: { statusId: dto.statusId },
+        },
+      });
+      await queryRunner.manager.save(AuditLog, auditLog);
+
+      await queryRunner.commitTransaction();
+    } catch (err) {
+      await queryRunner.rollbackTransaction();
+      throw err;
+    } finally {
+      await queryRunner.release();
+    }
+
+    return this.findOneWithRelations(ds, id);
   }
 
   async update(id: string, updateData: Record<string, any>, actor?: TaskActorContext) {
@@ -76,9 +151,66 @@ export class TasksService {
       },
     );
 
+    const oldSnapshot = { title: task.title, statusId: task.statusId, assigneeMemberId: task.assigneeMemberId };
     repo.merge(task, updateData);
     const saved = await repo.save(task);
+
+    const qr = ds.createQueryRunner();
+    await qr.connect();
+    await qr.startTransaction();
+    try {
+      const auditLog = qr.manager.create(AuditLog, {
+        actorMemberId: actor?.workspaceMemberId ?? null,
+        entity: 'task',
+        entityId: saved.id,
+        action: 'UPDATE',
+        changes: { old: oldSnapshot, new: updateData },
+      });
+      await qr.manager.save(AuditLog, auditLog);
+      await qr.commitTransaction();
+    } catch {
+      await qr.rollbackTransaction();
+    } finally {
+      await qr.release();
+    }
+
     return this.findOneWithRelations(ds, saved.id);
+  }
+
+  async remove(id: string, actor?: TaskActorContext) {
+    const ds = await this.tenantConnection.getTenantConnection();
+    const repo = ds.getRepository(Task);
+
+    const task = await repo.findOne({ where: { id } });
+    if (!task) throw new NotFoundException('Tarea no encontrada');
+
+    if (this.shouldValidateProductAccess(actor)) {
+      await this.verifyProductAccess(ds, task.productId, actor.workspaceMemberId);
+    }
+
+    const snapshot = { title: task.title, productId: task.productId };
+    await repo.remove(task);
+
+    const qr = ds.createQueryRunner();
+    await qr.connect();
+    await qr.startTransaction();
+    try {
+      const auditLog = qr.manager.create(AuditLog, {
+        actorMemberId: actor?.workspaceMemberId ?? null,
+        entity: 'task',
+        entityId: id,
+        action: 'DELETE',
+        changes: snapshot,
+      });
+      await qr.manager.save(AuditLog, auditLog);
+      await qr.commitTransaction();
+    } catch {
+      await qr.rollbackTransaction();
+    } finally {
+      await qr.release();
+    }
+
+    return { deleted: true, id };
   }
 
   async findByProject(productId: string, page = 1, limit = 50) {

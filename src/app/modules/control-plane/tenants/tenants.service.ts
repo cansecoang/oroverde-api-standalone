@@ -5,6 +5,7 @@ import { TenantMember } from './entities/tenant-member.entity';
 import { TenantStatus } from '../../../common/enums/tenant-status.enum';
 import { GlobalUser } from '../users/entities/user.entity';
 import { GlobalOrganization } from '../organizations/entities/global-organization.entity';
+import { GlobalAuditLog } from '../audit/entities/global-audit-log.entity';
 
 // Entidades directas aún necesarias en este servicio
 import { WorkspaceMember }       from '../../app-plane/members/entities/workspace-member.entity';
@@ -25,6 +26,21 @@ export class TenantsService {
     @Optional() @Inject(TENANT_SEED_CALLBACK)
     private readonly seedCallback: TenantSeedCallback | null,
   ) {}
+
+  private async writeGlobalAudit(
+    actorUserId: string | null,
+    action: string,
+    entity: string,
+    entityId: string,
+    changes: Record<string, any>,
+  ): Promise<void> {
+    try {
+      const repo = this.dataSource.getRepository(GlobalAuditLog);
+      await repo.save(repo.create({ actorUserId, action, entity, entityId, changes }));
+    } catch (err) {
+      this.logger.error(`GlobalAuditLog write failed: ${err?.message}`, err?.stack);
+    }
+  }
 
   /** Lista todos los tenants registrados */
   async findAll() {
@@ -188,9 +204,15 @@ export class TenantsService {
         }
     }
 
-    return { 
-      msg: 'Tenant creado exitosamente. Ya eres el dueño.', 
-      tenant: savedTenant 
+    await this.writeGlobalAudit(superAdminId, 'CREATE', 'TENANT', savedTenant.id, {
+      name: savedTenant.name,
+      slug: savedTenant.slug,
+      dbName: savedTenant.dbName,
+    });
+
+    return {
+      msg: 'Tenant creado exitosamente. Ya eres el dueño.',
+      tenant: savedTenant
     };
   }
 
@@ -310,7 +332,7 @@ export class TenantsService {
   // H-4: ACTUALIZAR ESTADO DEL TENANT
   // ─────────────────────────────────────────────────────────────────────────
 
-  async updateStatus(tenantId: string, status: TenantStatus) {
+  async updateStatus(tenantId: string, status: TenantStatus, actorUserId?: string) {
     const tenant = await this.dataSource.getRepository(Tenant).findOne({ where: { id: tenantId } });
     if (!tenant) throw new NotFoundException('Tenant no encontrado');
 
@@ -318,9 +340,15 @@ export class TenantsService {
       return { message: `El tenant ya se encuentra en estado ${status}`, tenant };
     }
 
+    const previousStatus = tenant.status;
     tenant.status = status;
     const saved = await this.dataSource.getRepository(Tenant).save(tenant);
     this.logger.log(`🔄 Tenant '${tenant.slug}' → status: ${status}`);
+
+    await this.writeGlobalAudit(actorUserId ?? null, 'UPDATE', 'TENANT', tenantId, {
+      old: { status: previousStatus },
+      new: { status },
+    });
 
     return { message: `Tenant actualizado a ${status}`, tenant: saved };
   }
@@ -329,7 +357,7 @@ export class TenantsService {
   // H-4: ELIMINAR TENANT (SOFT → ARCHIVED + opcional DROP DATABASE)
   // ─────────────────────────────────────────────────────────────────────────
 
-  async deleteTenant(tenantId: string, dropDatabase = false) {
+  async deleteTenant(tenantId: string, dropDatabase = false, actorUserId?: string) {
     const tenant = await this.dataSource.getRepository(Tenant).findOne({ where: { id: tenantId } });
     if (!tenant) throw new NotFoundException('Tenant no encontrado');
 
@@ -352,6 +380,12 @@ export class TenantsService {
         throw new InternalServerErrorException('Tenant archivado pero no se pudo eliminar la base de datos');
       }
     }
+
+    await this.writeGlobalAudit(actorUserId ?? null, 'DELETE', 'TENANT', tenantId, {
+      name: tenant.name,
+      slug: tenant.slug,
+      dropDatabase,
+    });
 
     return {
       message: dropDatabase

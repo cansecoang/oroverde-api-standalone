@@ -1,5 +1,5 @@
 import { Injectable, BadRequestException, NotFoundException, Scope, Logger } from '@nestjs/common';
-import { In, DataSource, QueryRunner } from 'typeorm';
+import { In, DataSource, QueryRunner, QueryFailedError } from 'typeorm';
 import { Product } from './entities/product.entity';
 import { ProductMember } from './entities/product-member.entity';
 import { ProductCustomOrgLink } from './entities/product-custom-org-link.entity';
@@ -70,6 +70,8 @@ function compareHierarchicalCode(a: string, b: string): number {
 
   return 0;
 }
+
+const SUPER_ADMIN_SENTINEL_ID = '00000000-0000-0000-0000-000000000000';
 
 @Injectable({ scope: Scope.REQUEST })
 export class ProductsService {
@@ -172,7 +174,7 @@ export class ProductsService {
           actorMemberId: memberId !== SUPER_ADMIN_SENTINEL ? memberId : null,
           action: 'CREATE_FAILED',
           entity: 'PRODUCT',
-          entityId: null,
+          entityId: 'n/a',
           changes: {
             error: err instanceof Error ? err.message : 'Unknown error',
             payload: {
@@ -423,27 +425,71 @@ export class ProductsService {
     };
   }
 
-  async getCapabilities(workspaceMemberId: string, tenantRole?: string): Promise<{ canCreateProduct: boolean }> {
+  async getCapabilities(
+    workspaceMemberId: string,
+    tenantRole?: string,
+  ): Promise<{
+    canCreateProduct: boolean;
+    canRequestProduct: boolean;
+    pendingRequestsCount: number;
+  }> {
     const SUPER_ADMIN_SENTINEL = '00000000-0000-0000-0000-000000000000';
 
     if (
       workspaceMemberId === SUPER_ADMIN_SENTINEL ||
       tenantRole === TenantRole.GENERAL_COORDINATOR
     ) {
-      return { canCreateProduct: true };
+      // GC and super-admin: get pending count for the review badge
+      const dataSource = await this.tenantConnection.getTenantConnection();
+      const pendingRequestsCount = await this.getPendingRequestsCount(dataSource);
+      return { canCreateProduct: true, canRequestProduct: false, pendingRequestsCount };
     }
 
     const dataSource = await this.tenantConnection.getTenantConnection();
-    const coordinatorMembership = await dataSource.getRepository(ProductMember).findOne({
+    const memberRepo = dataSource.getRepository(ProductMember);
+
+    const coordinatorMembership = await memberRepo.findOne({
       where: {
         memberId: workspaceMemberId,
         productRole: ProductRole.PRODUCT_COORDINATOR,
       },
     });
 
+    const canCreateProduct = !!coordinatorMembership;
+
+    if (canCreateProduct) {
+      // PRODUCT_COORDINATOR: can create directly + review requests
+      const pendingRequestsCount = await this.getPendingRequestsCount(dataSource);
+      return { canCreateProduct: true, canRequestProduct: false, pendingRequestsCount };
+    }
+
+    // Check if user is a DEVELOPER_WORKER in any product
+    const workerMembership = await memberRepo.findOne({
+      where: {
+        memberId: workspaceMemberId,
+        productRole: ProductRole.DEVELOPER_WORKER,
+      },
+    });
+
+    const canRequestProduct = !!workerMembership;
+
     return {
-      canCreateProduct: !!coordinatorMembership,
+      canCreateProduct: false,
+      canRequestProduct,
+      pendingRequestsCount: 0,
     };
+  }
+
+  private async getPendingRequestsCount(dataSource: import('typeorm').DataSource): Promise<number> {
+    try {
+      // Dynamic import to avoid circular dependency — ProductCreationRequest lives in product-requests module
+      const { ProductCreationRequest } = await import('../product-requests/entities/product-creation-request.entity');
+      return await dataSource
+        .getRepository(ProductCreationRequest)
+        .count({ where: { status: 'PENDING' } });
+    } catch {
+      return 0;
+    }
   }
 
   /**
@@ -775,7 +821,7 @@ export class ProductsService {
 
       // E. Auditoría
       const auditLog = queryRunner.manager.create(AuditLog, {
-        actorMemberId: memberId,
+        actorMemberId: memberId !== SUPER_ADMIN_SENTINEL_ID ? memberId : null,
         action: 'UPDATE',
         entity: 'PRODUCT',
         entityId: id,
@@ -818,7 +864,7 @@ export class ProductsService {
     try {
       // Auditoría antes de eliminar
       const auditLog = queryRunner.manager.create(AuditLog, {
-        actorMemberId: memberId,
+        actorMemberId: memberId !== SUPER_ADMIN_SENTINEL_ID ? memberId : null,
         action: 'DELETE',
         entity: 'PRODUCT',
         entityId: id,
@@ -840,6 +886,57 @@ export class ProductsService {
         [id],
       );
 
+      // project_checkins cleanup — handles same-product checkins AND cross-product checkins
+      // where organizer_id references a product_member of this product.
+      // Pivot tables must be cleaned FIRST (no ON DELETE CASCADE by default).
+      await queryRunner.query(
+        `DELETE FROM checkin_attendees_pivot
+         WHERE checkin_id IN (
+           SELECT id FROM project_checkins
+           WHERE product_id = $1
+              OR organizer_id IN (SELECT id FROM product_members WHERE product_id = $1)
+         )
+            OR member_id IN (SELECT id FROM product_members WHERE product_id = $1)`,
+        [id],
+      );
+      await queryRunner.query(
+        `DELETE FROM checkin_linked_tasks_pivot
+         WHERE checkin_id IN (
+           SELECT id FROM project_checkins
+           WHERE product_id = $1
+              OR organizer_id IN (SELECT id FROM product_members WHERE product_id = $1)
+         )`,
+        [id],
+      );
+      await queryRunner.query(
+        `DELETE FROM project_checkins
+         WHERE product_id = $1
+            OR organizer_id IN (SELECT id FROM product_members WHERE product_id = $1)`,
+        [id],
+      );
+      // Explicitly delete product_members BEFORE remove(product) to prevent the
+      // DB-level ON DELETE CASCADE from triggering ON DELETE SET NULL on organizer_id.
+      await queryRunner.query(
+        `DELETE FROM product_members WHERE product_id = $1`,
+        [id],
+      );
+
+      // Compatibilidad con esquemas donde product_creation_requests tenga FK
+      // a products sin ON DELETE SET NULL/CASCADE.
+      try {
+        await queryRunner.query(
+          `UPDATE product_creation_requests
+           SET resulting_product_id = NULL
+           WHERE resulting_product_id = $1`,
+          [id],
+        );
+      } catch (cleanupErr) {
+        // 42P01 = undefined_table (no existe product_creation_requests en este tenant)
+        if ((cleanupErr as any)?.code !== '42P01') {
+          throw cleanupErr;
+        }
+      }
+
       await queryRunner.manager.remove(product);
       await queryRunner.commitTransaction();
 
@@ -847,6 +944,42 @@ export class ProductsService {
 
     } catch (err) {
       await queryRunner.rollbackTransaction();
+
+      if (err instanceof QueryFailedError) {
+        const dbErr = err as any;
+        const code = dbErr?.code as string | undefined;
+        const constraint = String(dbErr?.constraint ?? '');
+        const detail = String(dbErr?.detail ?? dbErr?.message ?? '');
+
+        if (code === '23503') {
+          const productRequestFkHit =
+            constraint.toLowerCase().includes('resulting_product') ||
+            detail.includes('product_creation_requests') ||
+            detail.includes('resulting_product_id');
+
+          if (productRequestFkHit) {
+            throw new BadRequestException(
+              'No se puede eliminar el producto porque hay solicitudes de creacion que lo referencian. Libera esa referencia o usa FK con ON DELETE SET NULL.',
+            );
+          }
+
+          throw new BadRequestException(
+            'No se puede eliminar el producto porque existen referencias relacionadas en el tenant.',
+          );
+        }
+
+        if (code === '23502') {
+          const organizerMismatch =
+            detail.includes('project_checkins') && detail.includes('organizer_id');
+
+          if (organizerMismatch) {
+            throw new BadRequestException(
+              'No se puede eliminar el producto por una inconsistencia de esquema en check-ins (organizer_id NOT NULL con FK SET NULL).',
+            );
+          }
+        }
+      }
+
       throw err;
     } finally {
       await queryRunner.release();
@@ -1714,5 +1847,36 @@ export class ProductsService {
     }
 
     return 0;
+  }
+
+  // ─────────────────────────────────────────────────────────────────────
+  // MY PRODUCTS — dashboard personalizado
+  // ─────────────────────────────────────────────────────────────────────
+
+  /**
+   * Devuelve los productos donde el workspace-member tiene membresía,
+   * junto con su rol y metadatos básicos para el dashboard personal.
+   */
+  async getMyProducts(memberId: string) {
+    const dataSource = await this.tenantConnection.getTenantConnection();
+    const memberships = await dataSource.getRepository(ProductMember).find({
+      where: { memberId },
+      relations: ['product', 'product.country', 'product.ownerOrganization'],
+    });
+    return memberships
+      .filter((pm) => !!pm.product)
+      .map((pm) => ({
+        id: pm.product.id,
+        name: pm.product.name,
+        productRole: pm.productRole,
+        isResponsible: pm.isResponsible,
+        delivery_date: pm.product.delivery_date ?? null,
+        country: pm.product.country
+          ? { id: pm.product.country.id, name: pm.product.country.name, code: (pm.product.country as any).code ?? '' }
+          : null,
+        ownerOrganization: pm.product.ownerOrganization
+          ? { id: pm.product.ownerOrganization.id, name: pm.product.ownerOrganization.name }
+          : null,
+      }));
   }
 }

@@ -5,8 +5,10 @@ import { TenantConnectionService } from '../../tenancy/tenant-connection.service
 // Entidades
 import { GlobalOrganization } from '../../control-plane/organizations/entities/global-organization.entity';
 import { WorkspaceOrganization } from './entities/workspace-organization.entity';
+import { AuditLog } from '../audit/entities/audit-log.entity';
 // DTOs
 import { CreateWorkspaceOrganizationDto } from './dto/create-workspace-organization.dto';
+import { UpdateWorkspaceOrganizationDto } from './dto/update-workspace-organization.dto';
 
 @Injectable({ scope: Scope.REQUEST })
 export class OrganizationsService {
@@ -80,6 +82,44 @@ export class OrganizationsService {
     });
 
     return repo.save(newOrg);
+  }
+
+  // ✏️ ACTUALIZAR
+  async update(id: string, dto: UpdateWorkspaceOrganizationDto, actorMemberId?: string) {
+    const dataSource = await this.tenantConnection.getTenantConnection();
+    const repo = dataSource.getRepository(WorkspaceOrganization);
+
+    const org = await repo.findOne({ where: { id } });
+    if (!org) throw new NotFoundException('Organización no encontrada.');
+
+    const oldSnapshot = { name: org.name, type: org.type, contact_email: org.contact_email };
+
+    if (dto.name !== undefined) org.name = dto.name.trim();
+    if (dto.type !== undefined) org.type = dto.type.trim() || null;
+    if (dto.contact_email !== undefined) org.contact_email = dto.contact_email.trim() || null;
+
+    const saved = await repo.save(org);
+
+    const qr = dataSource.createQueryRunner();
+    await qr.connect();
+    await qr.startTransaction();
+    try {
+      const auditLog = qr.manager.create(AuditLog, {
+        actorMemberId: actorMemberId ?? null,
+        entity: 'workspace_organization',
+        entityId: saved.id,
+        action: 'UPDATE',
+        changes: { old: oldSnapshot, new: { name: saved.name, type: saved.type, contact_email: saved.contact_email } },
+      });
+      await qr.manager.save(AuditLog, auditLog);
+      await qr.commitTransaction();
+    } catch {
+      await qr.rollbackTransaction();
+    } finally {
+      await qr.release();
+    }
+
+    return saved;
   }
 
   // 📋 LISTAR LOCALES

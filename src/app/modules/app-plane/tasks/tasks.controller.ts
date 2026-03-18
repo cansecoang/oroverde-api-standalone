@@ -1,4 +1,4 @@
-import { Controller, Post, Patch, Body, Param, Get, UseGuards, ParseUUIDPipe, Request, Query } from '@nestjs/common';
+import { Controller, Post, Patch, Delete, Body, Param, Get, UseGuards, ParseUUIDPipe, Request, Query } from '@nestjs/common';
 import { ApiTags, ApiCookieAuth, ApiOperation, ApiResponse, ApiParam, ApiQuery } from '@nestjs/swagger';
 import { TasksService } from './tasks.service';
 import { CreateTaskDto } from './dto/create-task.dto';
@@ -23,8 +23,11 @@ export class TasksController {
   @ApiResponse({ status: 201, description: 'Tarea creada exitosamente' })
   @ApiResponse({ status: 400, description: 'Datos inválidos' })
   @ApiResponse({ status: 401, description: 'No autenticado' })
-  create(@Body() dto: CreateTaskDto) {
-    return this.service.create(dto);
+  create(@Body() dto: CreateTaskDto, @Request() req) {
+    return this.service.create(dto, {
+      workspaceMemberId: req.workspaceMember?.id,
+      tenantRole: req.workspaceMember?.tenantRole,
+    });
   }
 
   @Patch(':id/status')
@@ -58,6 +61,23 @@ export class TasksController {
     @Request() req,
   ) {
     return this.service.update(id, dto, {
+      workspaceMemberId: req.workspaceMember?.id,
+      tenantRole: req.workspaceMember?.tenantRole,
+    });
+  }
+
+  @Delete(':id')
+  @RequirePermission(Permission.TASK_DELETE)
+  @ApiOperation({ summary: 'Eliminar tarea' })
+  @ApiParam({ name: 'id', type: String, description: 'UUID de la tarea' })
+  @ApiResponse({ status: 200, description: 'Tarea eliminada' })
+  @ApiResponse({ status: 401, description: 'No autenticado' })
+  @ApiResponse({ status: 404, description: 'Tarea no encontrada' })
+  remove(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Request() req,
+  ) {
+    return this.service.remove(id, {
       workspaceMemberId: req.workspaceMember?.id,
       tenantRole: req.workspaceMember?.tenantRole,
     });

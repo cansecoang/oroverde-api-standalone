@@ -61,8 +61,9 @@ export class TenantsController {
   updateStatus(
     @Param('id', ParseUUIDPipe) tenantId: string,
     @Body() dto: UpdateTenantStatusDto,
+    @Request() req,
   ) {
-    return this.tenantsService.updateStatus(tenantId, dto.status);
+    return this.tenantsService.updateStatus(tenantId, dto.status, req.user?.id);
   }
 
   // ─────────── H-4: Eliminar (archivar) tenant ───────────
@@ -76,7 +77,8 @@ export class TenantsController {
   deleteTenant(
     @Param('id', ParseUUIDPipe) tenantId: string,
     @Query('dropDatabase') dropDatabase?: string,
+    @Request() req = null,
   ) {
-    return this.tenantsService.deleteTenant(tenantId, dropDatabase === 'true');
+    return this.tenantsService.deleteTenant(tenantId, dropDatabase === 'true', req?.user?.id);
   }
 }

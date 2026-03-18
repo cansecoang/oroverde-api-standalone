@@ -138,6 +138,8 @@ export class ProductsController {
       type: 'object',
       properties: {
         canCreateProduct: { type: 'boolean' },
+        canRequestProduct: { type: 'boolean' },
+        pendingRequestsCount: { type: 'number' },
       },
     },
   })
@@ -146,6 +148,16 @@ export class ProductsController {
       req.workspaceMember.id,
       req.workspaceMember.tenantRole,
     );
+  }
+
+  // ── My Products (dashboard personal) ─────────────────────────────────
+
+  @Get('my')
+  @RequirePermission(Permission.PRODUCT_READ)
+  @ApiOperation({ summary: 'Productos en los que participa el usuario autenticado' })
+  @ApiResponse({ status: 200, description: 'Lista de productos con el rol del usuario' })
+  getMyProducts(@Request() req) {
+    return this.productsService.getMyProducts(req.workspaceMember.id);
   }
 
   // ── Single Product CRUD ───────────────────────────────────────────────

@@ -37,7 +37,7 @@ export class CatalogsController {
   }
 
   @Get('options/:type')
-  @RequirePermission(Permission.TASK_READ)
+  @RequirePermission(Permission.CATALOG_READ)
   @ApiOperation({ summary: 'Obtener items por tipo' })
   @ApiParam({ name: 'type', type: String, description: 'Tipo de catálogo' })
   @ApiResponse({ status: 200, description: 'Items del tipo solicitado' })

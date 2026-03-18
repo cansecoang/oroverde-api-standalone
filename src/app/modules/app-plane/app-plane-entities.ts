@@ -23,6 +23,8 @@ import { ProductStrategy }        from './strategy/entities/product-strategy.ent
 import { StrategyValue }          from './strategy/entities/strategy-value.entity';
 import { WorkspaceOrganization }  from './organizations/entities/workspace-organization.entity';
 import { Country }                from './products/entities/country.entity';
+import { ProductCreationRequest } from './product-requests/entities/product-creation-request.entity';
+import { Notification }           from './notifications/entities/notification.entity';
 
 // Catálogos (consolidados en apps/api)
 import { Catalog }     from './catalogs/entities/catalog.entity';
@@ -46,4 +48,6 @@ export const APP_PLANE_ENTITIES = [
   StrategyValue,
   WorkspaceOrganization,
   Country,
+  ProductCreationRequest,
+  Notification,
 ] as const;

@@ -24,6 +24,8 @@ export class StrategyTimelineProductDto {
   @ApiPropertyOptional() actualEnd: string | null;
   @ApiProperty({ type: Number }) committedTarget: number;
   @ApiProperty({ type: Number }) reportedProgress: number;
+  @ApiProperty({ type: Number }) totalTasks: number;
+  @ApiProperty({ type: Number }) completedTasks: number;
   @ApiProperty({ type: Number }) progressPercent: number;
   @ApiProperty({ type: [StrategyTimelineTaskDto] }) tasks: StrategyTimelineTaskDto[];
 }
@@ -38,6 +40,8 @@ export class StrategyTimelineWorkpackageDto {
   @ApiPropertyOptional() actualEnd: string | null;
   @ApiProperty({ type: Number }) committedTotal: number;
   @ApiProperty({ type: Number }) reportedTotal: number;
+  @ApiProperty({ type: Number }) totalTasks: number;
+  @ApiProperty({ type: Number }) completedTasks: number;
   @ApiProperty({ type: Number }) progressPercent: number;
   @ApiProperty({ type: [StrategyTimelineProductDto] }) products: StrategyTimelineProductDto[];
 }
@@ -54,6 +58,8 @@ export class StrategyTimelineIndicatorDto {
   @ApiProperty({ type: Number }) totalTarget: number;
   @ApiProperty({ type: Number }) committedTotal: number;
   @ApiProperty({ type: Number }) reportedTotal: number;
+  @ApiProperty({ type: Number }) totalTasks: number;
+  @ApiProperty({ type: Number }) completedTasks: number;
   @ApiProperty({ type: Number }) progressPercent: number;
   @ApiPropertyOptional() indicatorPlannedCompletionDate: string | null;
   @ApiPropertyOptional() indicatorActualCompletionDate: string | null;
@@ -61,7 +67,14 @@ export class StrategyTimelineIndicatorDto {
   @ApiPropertyOptional() plannedEnd: string | null;
   @ApiPropertyOptional() actualStart: string | null;
   @ApiPropertyOptional() actualEnd: string | null;
+  @ApiPropertyOptional() groupByCatalogItemId: string | null;
+  @ApiPropertyOptional() groupByCatalogItemName: string | null;
   @ApiProperty({ type: [StrategyTimelineWorkpackageDto] }) workpackages: StrategyTimelineWorkpackageDto[];
+}
+
+export class StrategyTimelineGroupByFieldDto {
+  @ApiProperty() key: string;
+  @ApiProperty() label: string;
 }
 
 export class StrategyTimelineOutputOptionDto {
@@ -84,6 +97,8 @@ export class StrategyTimelineMetaDto {
   @ApiProperty({ type: Number }) workpackageCount: number;
   @ApiProperty({ type: Number }) productCount: number;
   @ApiProperty({ type: Number }) taskCount: number;
+  @ApiProperty({ type: Number }) completedTaskCount: number;
+  @ApiProperty({ type: Number }) taskCompletionPercent: number;
   @ApiProperty({ type: Number }) unscheduledTaskCount: number;
 }
 
@@ -92,6 +107,7 @@ export class StrategyTimelineResponseDto {
   @ApiProperty() workpackageKey: string;
   @ApiPropertyOptional() tenantStartDate: string | null;
   @ApiPropertyOptional() tenantEndDate: string | null;
+  @ApiPropertyOptional({ type: StrategyTimelineGroupByFieldDto }) groupByField: StrategyTimelineGroupByFieldDto | null;
   @ApiProperty({ type: [StrategyTimelineOutputOptionDto] }) outputs: StrategyTimelineOutputOptionDto[];
   @ApiProperty({ type: [StrategyTimelineIndicatorOptionDto] }) indicators: StrategyTimelineIndicatorOptionDto[];
   @ApiProperty({ type: [StrategyTimelineIndicatorDto] }) timeline: StrategyTimelineIndicatorDto[];

@@ -46,8 +46,8 @@ export class ProjectCheckIn {
   organizer: ProductMember;
 
   @Index()
-  @Column({ name: 'organizer_id' })
-  organizerId: string;
+  @Column({ name: 'organizer_id', nullable: true })
+  organizerId: string | null;
 
   // 3. 👥 ASISTENTES INVITADOS (Muchos miembros en muchas reuniones)
   // TypeORM creará la tabla 'checkin_attendees' automáticamente

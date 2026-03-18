@@ -69,8 +69,9 @@ export class GlobalUsersController {
   update(
     @Param('id', ParseUUIDPipe) id: string,
     @Body() dto: UpdateUserDto,
+    @Request() req,
   ) {
-    return this.usersService.update(id, dto);
+    return this.usersService.update(id, dto, req.user?.id);
   }
 
   @Patch(':id/role')
@@ -103,7 +104,7 @@ export class GlobalUsersController {
     if (req.user.id === id && !dto.isActive) {
       throw new BadRequestException('No puede desactivar su propia cuenta.');
     }
-    return this.usersService.updateStatus(id, dto);
+    return this.usersService.updateStatus(id, dto, req.user?.id);
   }
 
   @Delete(':id')
@@ -122,6 +123,6 @@ export class GlobalUsersController {
     if (req.user.id === id) {
       throw new BadRequestException('No puede eliminar su propia cuenta.');
     }
-    return this.usersService.remove(id);
+    return this.usersService.remove(id, req.user?.id);
   }
 }
