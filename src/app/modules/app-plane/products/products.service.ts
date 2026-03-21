@@ -338,40 +338,40 @@ export class ProductsService {
     }
 
     if (effectiveGroupBy === 'owner_organization') {
-      qb.leftJoin('product.ownerOrganization', 'groupOwnerOrg');
-      qb.addOrderBy('groupOwnerOrg.name', 'ASC', 'NULLS LAST');
+      qb.addOrderBy(
+        '(SELECT wo.name FROM workspace_organizations wo WHERE wo.id = product.owner_organization_id)',
+        'ASC',
+        'NULLS LAST',
+      );
     } else if (effectiveGroupBy === 'country') {
-      qb.leftJoin('product.country', 'groupCountry');
-      qb.addOrderBy('groupCountry.name', 'ASC', 'NULLS LAST');
+      qb.addOrderBy(
+        '(SELECT c.name FROM countries c WHERE c.id = product.country_id)',
+        'ASC',
+        'NULLS LAST',
+      );
     } else if (effectiveGroupBy === 'responsible_member') {
-      qb.leftJoin('product.members', 'groupResponsibleMember', 'groupResponsibleMember.isResponsible = true')
-        .leftJoin('groupResponsibleMember.member', 'groupResponsibleWorkspaceMember');
-      qb.addOrderBy('groupResponsibleWorkspaceMember.full_name', 'ASC', 'NULLS LAST');
+      qb.addOrderBy(
+        `(SELECT MIN(wm.full_name)
+          FROM product_members pm
+          JOIN workspace_members wm ON wm.id = pm.member_id
+          WHERE pm.product_id = product.id
+            AND pm.is_responsible = true)`,
+        'ASC',
+        'NULLS LAST',
+      );
     }
 
     qb.addOrderBy('product.name', 'ASC');
 
-    const total = await qb.clone().distinct(true).getCount();
+    const total = await qb.clone().orderBy().getCount();
     const totalPages = Math.max(1, Math.ceil(total / cappedLimit));
     const effectivePage = Math.min(safePage, totalPages);
 
-    const idQuery = qb
+    const idRows: Array<{ id: string }> = await qb
       .clone()
       .select('product.id', 'id')
-      .addSelect('product.name', 'order_name');
-
-    if (effectiveGroupBy === 'owner_organization') {
-      idQuery.addSelect('groupOwnerOrg.name', 'order_group');
-    } else if (effectiveGroupBy === 'country') {
-      idQuery.addSelect('groupCountry.name', 'order_group');
-    } else if (effectiveGroupBy === 'responsible_member') {
-      idQuery.addSelect('groupResponsibleWorkspaceMember.full_name', 'order_group');
-    }
-
-    const idRows: Array<{ id: string }> = await idQuery
-      .distinct(true)
-      .skip((effectivePage - 1) * cappedLimit)
-      .take(cappedLimit)
+      .limit(cappedLimit)
+      .offset((effectivePage - 1) * cappedLimit)
       .getRawMany();
 
     const pagedIds = idRows.map((row) => row.id);

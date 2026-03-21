@@ -153,7 +153,9 @@ export class HybridPermissionsGuard implements CanActivate {
         }
       }
 
-      throw new ForbiddenException('Se requiere nivel General Coordinator o Product Coordinator para esta acción global');
+      throw new ForbiddenException(
+        `Permiso '${requiredPermission}' requiere rol General Coordinator o ser Product Coordinator en al menos un producto`,
+      );
     }
 
     // Conexión al silo del tenant (ya cacheada en pool)

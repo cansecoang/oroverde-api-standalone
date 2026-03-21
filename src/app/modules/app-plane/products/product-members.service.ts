@@ -75,8 +75,7 @@ export class ProductMembersService {
     }
 
     // Best-effort notification — outside transaction to avoid rollback on committed tx
-    const product = await dataSource.getRepository(Product).findOne({ where: { id: productId }, select: ['name'] }).catch(() => null);
-    const productName = product?.name ?? productId;
+    const productName = await this.resolveProductName(dataSource, productId);
     void this.notifications.createNotification(
       dataSource,
       dto.memberId,
@@ -207,8 +206,7 @@ export class ProductMembersService {
     }
 
     // Best-effort notification — outside transaction to avoid rollback on committed tx
-    const product = await dataSource.getRepository(Product).findOne({ where: { id: productId }, select: ['name'] }).catch(() => null);
-    const productName = product?.name ?? productId;
+    const productName = await this.resolveProductName(dataSource, productId);
     void this.notifications.createNotification(
       dataSource,
       recipientMemberId,
@@ -217,6 +215,21 @@ export class ProductMembersService {
       `Fuiste removido del producto "${productName}".`,
       { entityType: 'PRODUCT', entityId: productId, metadata: { productName } },
     );
+  }
+
+  private async resolveProductName(dataSource: any, productId: string): Promise<string> {
+    try {
+      const row = await dataSource.getRepository(Product)
+        .createQueryBuilder('product')
+        .select('product.name', 'name')
+        .where('product.id = :productId', { productId })
+        .limit(1)
+        .getRawOne() as { name?: string } | undefined;
+
+      return row?.name ?? productId;
+    } catch {
+      return productId;
+    }
   }
 
   async getProjectTeam(productId: string) {

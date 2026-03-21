@@ -73,6 +73,16 @@ export class AllExceptionsFilter implements ExceptionFilter {
         case '42703': // undefined_column
           message = 'Columna no encontrada en la base de datos';
           status = HttpStatus.INTERNAL_SERVER_ERROR;
+          details = {
+            code: errorCode,
+            ...(dbError.table && { table: dbError.table }),
+            ...(dbError.column && { column: dbError.column }),
+            ...(dbError.hint && { hint: dbError.hint }),
+            ...(dbError.position && { position: dbError.position }),
+            ...(this.safeQueryFragment(dbError.query) && {
+              queryFragment: this.safeQueryFragment(dbError.query),
+            }),
+          };
           break;
         default:
           message = 'Error en la operación de base de datos';
@@ -83,6 +93,12 @@ export class AllExceptionsFilter implements ExceptionFilter {
         `Database error [${errorCode}]: ${dbError.message}`,
         dbError.stack,
       );
+
+      if (errorCode === '42703') {
+        this.logger.warn(
+          `Database diagnostics [42703]: ${JSON.stringify(details)}`,
+        );
+      }
     }
     // 3. TypeORM EntityNotFoundError
     else if (exception instanceof EntityNotFoundError) {
@@ -132,5 +148,20 @@ export class AllExceptionsFilter implements ExceptionFilter {
       ...(column && { column }),
       ...(detail && { detail }),
     };
+  }
+
+  /**
+   * Entrega un fragmento seguro de la consulta para depuración.
+   * Evita parámetros y limita longitud para no exponer datos sensibles.
+   */
+  private safeQueryFragment(query: unknown): string | undefined {
+    if (typeof query !== 'string' || !query.trim()) {
+      return undefined;
+    }
+
+    return query
+      .replace(/\s+/g, ' ')
+      .trim()
+      .slice(0, 220);
   }
 }

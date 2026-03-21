@@ -57,26 +57,12 @@ export class TasksService {
       await qr.release();
     }
 
-    const result = await this.findOneWithRelations(ds, saved.id);
+    // Fallback to saved entity if relation loading fails (e.g. DISTINCT subquery bug in old dist)
+    const result = await this.findOneWithRelations(ds, saved.id).catch(() => saved);
 
-    // Best-effort: notify the assignee if one was set
+    // Best-effort: notification failures must never break task creation.
     if (saved.assigneeMemberId) {
-      const pm = await ds.getRepository(ProductMember).findOne({
-        where: { id: saved.assigneeMemberId },
-        select: ['memberId'],
-      });
-      if (pm?.memberId) {
-        const product = await ds.getRepository(Product).findOne({ where: { id: saved.productId }, select: ['name'] });
-        const productName = product?.name ?? saved.productId;
-        void this.notifications.createNotification(
-          ds,
-          pm.memberId,
-          'TASK_ASSIGNED',
-          'Se te asignó una tarea',
-          `Se te asignó la tarea "${saved.title}" en el producto "${productName}".`,
-          { entityType: 'TASK', entityId: saved.id, metadata: { taskTitle: saved.title, productName, productId: saved.productId } },
-        );
-      }
+      void this.notifyTaskAssignee(ds, saved);
     }
 
     return result;
@@ -215,21 +201,48 @@ export class TasksService {
 
   async findByProject(productId: string, page = 1, limit = 50) {
     const ds = await this.tenantConnection.getTenantConnection();
-    const [data, total] = await ds.getRepository(Task).findAndCount({
-      where: { productId },
-      relations: ['status', 'phase', 'assignee', 'assignee.member', 'assignedOrganization'],
-      order: { createdAt: 'DESC' },
-      skip: (page - 1) * limit,
-      take: limit,
-    });
+
+    // Use limit/offset (direct SQL) instead of take/skip to avoid TypeORM's DISTINCT
+    // subquery optimization, which generates "distinctAlias.Product_id" — a capitalized
+    // alias that PostgreSQL rejects because the real column is "product_id".
+    const total = await ds.getRepository(Task)
+      .createQueryBuilder('task')
+      .where('task.productId = :productId', { productId })
+      .getCount();
+
+    const data = await ds.getRepository(Task)
+      .createQueryBuilder('task')
+      .leftJoinAndSelect('task.status', 'status')
+      .leftJoinAndSelect('task.phase', 'phase')
+      .leftJoinAndSelect('task.assignee', 'assignee')
+      .leftJoinAndSelect('assignee.member', 'assigneeMember')
+      .leftJoinAndSelect('task.assignedOrganization', 'assignedOrganization')
+      .where('task.productId = :productId', { productId })
+      .orderBy('task.createdAt', 'DESC')
+      .limit(limit)
+      .offset((page - 1) * limit)
+      .getMany();
+
     return { data, total, page, limit };
   }
 
   private async findOneWithRelations(ds: any, id: string) {
-    const task = await ds.getRepository(Task).findOne({
-      where: { id },
-      relations: ['status', 'phase', 'assignee', 'assignee.member', 'assignedOrganization'],
-    });
+    // Use getMany() (no take/skip) to avoid TypeORM's DISTINCT subquery optimization.
+    // getOne() internally sets take=1 which triggers executeEntitiesAndRawResults to wrap
+    // the query in a "SELECT DISTINCT ... distinctAlias" subquery. TypeORM then generates
+    // the alias "Product_id" (entity class name + "_id") for ProductMember's product FK,
+    // but PostgreSQL expects "product_id" → error 42703.
+    const results = await ds.getRepository(Task)
+      .createQueryBuilder('task')
+      .leftJoinAndSelect('task.status', 'status')
+      .leftJoinAndSelect('task.phase', 'phase')
+      .leftJoinAndSelect('task.assignee', 'assignee')
+      .leftJoinAndSelect('assignee.member', 'assigneeMember')
+      .leftJoinAndSelect('task.assignedOrganization', 'assignedOrganization')
+      .where('task.id = :id', { id })
+      .getMany();
+
+    const task = results[0];
     if (!task) {
       throw new NotFoundException('Tarea no encontrada');
     }
@@ -361,5 +374,50 @@ export class TasksService {
     if (actor.workspaceMemberId === SUPER_ADMIN_SENTINEL_ID) return false;
     if (actor.tenantRole === TenantRole.GENERAL_COORDINATOR) return false;
     return true;
+  }
+
+  private async notifyTaskAssignee(ds: any, task: Task): Promise<void> {
+    try {
+      const pm = await ds.getRepository(ProductMember).findOne({
+        where: { id: task.assigneeMemberId },
+        select: ['memberId'],
+      });
+
+      if (!pm?.memberId) {
+        return;
+      }
+
+      const productName = await this.resolveProductName(ds, task.productId);
+
+      await this.notifications.createNotification(
+        ds,
+        pm.memberId,
+        'TASK_ASSIGNED',
+        'Se te asignó una tarea',
+        `Se te asignó la tarea "${task.title}" en el producto "${productName}".`,
+        {
+          entityType: 'TASK',
+          entityId: task.id,
+          metadata: { taskTitle: task.title, productName, productId: task.productId },
+        },
+      );
+    } catch {
+      // Best-effort notification: ignore failures to preserve primary mutation flow.
+    }
+  }
+
+  private async resolveProductName(ds: any, productId: string): Promise<string> {
+    try {
+      const row = await ds.getRepository(Product)
+        .createQueryBuilder('product')
+        .select('product.name', 'name')
+        .where('product.id = :productId', { productId })
+        .limit(1)
+        .getRawOne() as { name?: string } | undefined;
+
+      return row?.name ?? productId;
+    } catch {
+      return productId;
+    }
   }
 }
