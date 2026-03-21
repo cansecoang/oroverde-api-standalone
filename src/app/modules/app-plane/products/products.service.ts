@@ -12,6 +12,7 @@ import { UpdateProductDto } from './dto/update-product.dto';
 import { CustomFieldValueDto } from './dto/custom-field-value.dto';
 import { CustomOrgFieldDto } from './dto/custom-link-field.dto';
 import { ProductRole, TenantRole } from '../../../common/enums/business-roles.enum';
+import { AppAbility } from '../../../common/casl/casl-types';
 import { WorkspaceOrganization } from '../organizations/entities/workspace-organization.entity';
 import { CatalogItem } from '../catalogs/entities/catalog-item.entity';
 import { MatrixQueryDto } from './dto/matrix-query.dto';
@@ -425,59 +426,24 @@ export class ProductsService {
     };
   }
 
-  async getCapabilities(
-    workspaceMemberId: string,
-    tenantRole?: string,
-  ): Promise<{
+  async getCapabilities(ability: AppAbility): Promise<{
     canCreateProduct: boolean;
     canRequestProduct: boolean;
     pendingRequestsCount: number;
   }> {
-    const SUPER_ADMIN_SENTINEL = '00000000-0000-0000-0000-000000000000';
+    const canCreateProduct = ability.can('create', 'Product');
+    // Fix B-1: todos los MEMBER pueden solicitar si no pueden crear directamente.
+    // AbilityFactory ya otorga create('ProductRequest') a todos los MEMBER.
+    const canRequestProduct = !canCreateProduct && ability.can('create', 'ProductRequest');
 
-    if (
-      workspaceMemberId === SUPER_ADMIN_SENTINEL ||
-      tenantRole === TenantRole.GENERAL_COORDINATOR
-    ) {
-      // GC and super-admin: get pending count for the review badge
+    // Solo consultamos pendingRequestsCount para quienes pueden revisar o crear
+    let pendingRequestsCount = 0;
+    if (canCreateProduct || ability.can('review', 'ProductRequest')) {
       const dataSource = await this.tenantConnection.getTenantConnection();
-      const pendingRequestsCount = await this.getPendingRequestsCount(dataSource);
-      return { canCreateProduct: true, canRequestProduct: false, pendingRequestsCount };
+      pendingRequestsCount = await this.getPendingRequestsCount(dataSource);
     }
 
-    const dataSource = await this.tenantConnection.getTenantConnection();
-    const memberRepo = dataSource.getRepository(ProductMember);
-
-    const coordinatorMembership = await memberRepo.findOne({
-      where: {
-        memberId: workspaceMemberId,
-        productRole: ProductRole.PRODUCT_COORDINATOR,
-      },
-    });
-
-    const canCreateProduct = !!coordinatorMembership;
-
-    if (canCreateProduct) {
-      // PRODUCT_COORDINATOR: can create directly + review requests
-      const pendingRequestsCount = await this.getPendingRequestsCount(dataSource);
-      return { canCreateProduct: true, canRequestProduct: false, pendingRequestsCount };
-    }
-
-    // Check if user is a DEVELOPER_WORKER in any product
-    const workerMembership = await memberRepo.findOne({
-      where: {
-        memberId: workspaceMemberId,
-        productRole: ProductRole.DEVELOPER_WORKER,
-      },
-    });
-
-    const canRequestProduct = !!workerMembership;
-
-    return {
-      canCreateProduct: false,
-      canRequestProduct,
-      pendingRequestsCount: 0,
-    };
+    return { canCreateProduct, canRequestProduct, pendingRequestsCount };
   }
 
   private async getPendingRequestsCount(dataSource: import('typeorm').DataSource): Promise<number> {

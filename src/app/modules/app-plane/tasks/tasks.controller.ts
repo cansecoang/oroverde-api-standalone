@@ -1,24 +1,26 @@
 import { Controller, Post, Patch, Delete, Body, Param, Get, UseGuards, ParseUUIDPipe, Request, Query } from '@nestjs/common';
 import { ApiTags, ApiCookieAuth, ApiOperation, ApiResponse, ApiParam, ApiQuery } from '@nestjs/swagger';
+import { subject } from '@casl/ability';
 import { TasksService } from './tasks.service';
 import { CreateTaskDto } from './dto/create-task.dto';
 import { UpdateTaskDto } from './dto/update-task.dto';
 import { UpdateTaskStatusDto } from './dto/update-task-status.dto';
 import { AuthenticatedGuard } from '../../../common/guards/authenticated.guard';
 import { TenantAccessGuard } from '../../../common/guards/tenant-access.guard';
-import { HybridPermissionsGuard } from '../../../common/guards/hybrid-permissions.guard';
-import { RequirePermission } from '../../../common/decorators/require-permission.decorator';
-import { Permission } from '../../../common/enums/business-roles.enum';
+import { PoliciesGuard } from '../../../common/guards/policies.guard';
+import { CheckPolicies } from '../../../common/decorators/check-policies.decorator';
 
 @ApiTags('Tasks')
 @ApiCookieAuth()
 @Controller('tasks')
-@UseGuards(AuthenticatedGuard, TenantAccessGuard, HybridPermissionsGuard)
+@UseGuards(AuthenticatedGuard, TenantAccessGuard, PoliciesGuard)
 export class TasksController {
   constructor(private readonly service: TasksService) {}
 
   @Post()
-  @RequirePermission(Permission.TASK_WRITE)
+  @CheckPolicies((ability, req) =>
+    ability.can('create', subject('Task', { productId: req.body.productId }))
+  )
   @ApiOperation({ summary: 'Crear tarea' })
   @ApiResponse({ status: 201, description: 'Tarea creada exitosamente' })
   @ApiResponse({ status: 400, description: 'Datos inválidos' })
@@ -30,8 +32,11 @@ export class TasksController {
     });
   }
 
+  // PATCH /:id/status — sin productId en el request.
+  // Verificación condition-less: el usuario tiene permiso de updateStatus en ALGÚN producto.
+  // La validación de ownership específica la hace el servicio.
   @Patch(':id/status')
-  @RequirePermission(Permission.TASK_UPDATE_STATUS)
+  @CheckPolicies((ability) => ability.can('updateStatus', 'Task'))
   @ApiOperation({ summary: 'Actualizar estatus de tarea' })
   @ApiParam({ name: 'id', type: String, description: 'UUID de la tarea' })
   @ApiResponse({ status: 200, description: 'Estatus actualizado' })
@@ -48,8 +53,10 @@ export class TasksController {
     });
   }
 
+  // PATCH /:id — sin productId en el request.
+  // Verificación condition-less: el usuario tiene permiso de update en ALGÚN producto.
   @Patch(':id')
-  @RequirePermission(Permission.TASK_UPDATE)
+  @CheckPolicies((ability) => ability.can('update', 'Task'))
   @ApiOperation({ summary: 'Actualizar tarea' })
   @ApiParam({ name: 'id', type: String, description: 'UUID de la tarea' })
   @ApiResponse({ status: 200, description: 'Tarea actualizada' })
@@ -66,8 +73,10 @@ export class TasksController {
     });
   }
 
+  // DELETE /:id — sin productId en el request.
+  // Verificación condition-less: el usuario tiene permiso de delete en ALGÚN producto.
   @Delete(':id')
-  @RequirePermission(Permission.TASK_DELETE)
+  @CheckPolicies((ability) => ability.can('delete', 'Task'))
   @ApiOperation({ summary: 'Eliminar tarea' })
   @ApiParam({ name: 'id', type: String, description: 'UUID de la tarea' })
   @ApiResponse({ status: 200, description: 'Tarea eliminada' })
@@ -84,7 +93,9 @@ export class TasksController {
   }
 
   @Get('project/:productId')
-  @RequirePermission(Permission.TASK_READ)
+  @CheckPolicies((ability, req) =>
+    ability.can('read', subject('Task', { productId: req.params.productId }))
+  )
   @ApiOperation({ summary: 'Listar tareas por producto' })
   @ApiParam({ name: 'productId', type: String, description: 'UUID del producto' })
   @ApiQuery({ name: 'page', required: false, type: Number, description: 'Número de página' })

@@ -3,23 +3,21 @@ import { ApiTags, ApiCookieAuth, ApiOperation, ApiResponse, ApiQuery, ApiParam }
 import { WorkspaceMembersService } from './workspace-members.service';
 import { InviteMemberDto } from './dto/invite-member.dto';
 import { UpdateMemberDto } from './dto/update-member.dto';
-
 import { AuthenticatedGuard } from '../../../common/guards/authenticated.guard';
 import { TenantAccessGuard } from '../../../common/guards/tenant-access.guard';
-import { HybridPermissionsGuard } from '../../../common/guards/hybrid-permissions.guard';
-import { RequirePermission } from '../../../common/decorators/require-permission.decorator';
-import { Permission } from '../../../common/enums/business-roles.enum';
+import { PoliciesGuard } from '../../../common/guards/policies.guard';
+import { CheckPolicies } from '../../../common/decorators/check-policies.decorator';
 
 @ApiTags('Members')
 @ApiCookieAuth()
 @Controller('members')
-@UseGuards(AuthenticatedGuard, TenantAccessGuard, HybridPermissionsGuard)
+@UseGuards(AuthenticatedGuard, TenantAccessGuard, PoliciesGuard)
 export class WorkspaceMembersController {
   constructor(private readonly service: WorkspaceMembersService) {}
 
   /**
-   * Devuelve el perfil del workspace member que corresponde al usuario en sesión.
-   * Sin @RequirePermission → cualquier miembro del tenant puede consultarse a sí mismo.
+   * Sin @CheckPolicies → cualquier miembro del tenant puede consultarse a sí mismo.
+   * TenantAccessGuard ya verificó la membresía.
    */
   @Get('me')
   @ApiOperation({ summary: 'Mi perfil como miembro del workspace' })
@@ -30,7 +28,7 @@ export class WorkspaceMembersController {
   }
 
   @Post('invite')
-  @RequirePermission(Permission.MEMBER_MANAGE)
+  @CheckPolicies((ability) => ability.can('manage', 'WorkspaceMember'))
   @ApiOperation({ summary: 'Invitar miembro al workspace' })
   @ApiResponse({ status: 201, description: 'Invitación enviada exitosamente' })
   @ApiResponse({ status: 400, description: 'Datos inválidos' })
@@ -41,7 +39,7 @@ export class WorkspaceMembersController {
   }
 
   @Patch(':id')
-  @RequirePermission(Permission.MEMBER_MANAGE)
+  @CheckPolicies((ability) => ability.can('manage', 'WorkspaceMember'))
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Actualizar rol o alias de un miembro del workspace' })
   @ApiParam({ name: 'id', description: 'UUID del workspace member' })
@@ -57,7 +55,7 @@ export class WorkspaceMembersController {
   }
 
   @Get()
-  @RequirePermission(Permission.MEMBER_READ)
+  @CheckPolicies((ability) => ability.can('read', 'WorkspaceMember'))
   @ApiOperation({ summary: 'Listar miembros del workspace' })
   @ApiQuery({ name: 'page', required: false, type: Number, description: 'Número de página' })
   @ApiQuery({ name: 'limit', required: false, type: Number, description: 'Elementos por página' })

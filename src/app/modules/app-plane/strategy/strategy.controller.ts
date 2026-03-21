@@ -1,11 +1,11 @@
 import { Controller, Post, Get, Patch, Body, Param, Query, UseGuards, ParseUUIDPipe } from '@nestjs/common';
 import { ApiTags, ApiCookieAuth, ApiOperation, ApiResponse, ApiParam } from '@nestjs/swagger';
+import { subject } from '@casl/ability';
 import { StrategyService } from './strategy.service';
 import { AuthenticatedGuard } from '../../../common/guards/authenticated.guard';
 import { TenantAccessGuard } from '../../../common/guards/tenant-access.guard';
-import { HybridPermissionsGuard } from '../../../common/guards/hybrid-permissions.guard';
-import { RequirePermission } from '../../../common/decorators/require-permission.decorator';
-import { Permission } from '../../../common/enums/business-roles.enum';
+import { PoliciesGuard } from '../../../common/guards/policies.guard';
+import { CheckPolicies } from '../../../common/decorators/check-policies.decorator';
 import { CreateOutputDto } from './dto/create-output.dto';
 import { CreateIndicatorDto } from './dto/create-indicator.dto';
 import { AssignStrategyDto } from './dto/assign-strategy.dto';
@@ -17,12 +17,13 @@ import { StrategyTimelineResponseDto } from './dto/strategy-timeline-response.dt
 @ApiTags('Strategy')
 @ApiCookieAuth()
 @Controller('strategy')
-@UseGuards(AuthenticatedGuard, TenantAccessGuard, HybridPermissionsGuard)
+@UseGuards(AuthenticatedGuard, TenantAccessGuard, PoliciesGuard)
 export class StrategyController {
   constructor(private readonly service: StrategyService) {}
 
+  // globalWrite → solo GENERAL_COORDINATOR (GC tiene manage('Strategy') que cubre esta acción)
   @Post('outputs')
-  @RequirePermission(Permission.STRATEGY_GLOBAL_WRITE)
+  @CheckPolicies((ability) => ability.can('globalWrite', 'Strategy'))
   @ApiOperation({ summary: 'Crear output estratégico (solo Coordinador General)' })
   @ApiResponse({ status: 201, description: 'Output creado exitosamente' })
   @ApiResponse({ status: 400, description: 'Datos inválidos' })
@@ -32,7 +33,7 @@ export class StrategyController {
   }
 
   @Post('indicators')
-  @RequirePermission(Permission.STRATEGY_GLOBAL_WRITE)
+  @CheckPolicies((ability) => ability.can('globalWrite', 'Strategy'))
   @ApiOperation({ summary: 'Crear indicador estratégico (solo Coordinador General)' })
   @ApiResponse({ status: 201, description: 'Indicador creado exitosamente' })
   @ApiResponse({ status: 400, description: 'Datos inválidos' })
@@ -42,7 +43,9 @@ export class StrategyController {
   }
 
   @Post('assign')
-  @RequirePermission(Permission.STRATEGY_WRITE)
+  @CheckPolicies((ability, req) =>
+    ability.can('write', subject('Strategy', { productId: req.body.productId }))
+  )
   @ApiOperation({ summary: 'Asignar indicador a producto' })
   @ApiResponse({ status: 201, description: 'Indicador asignado exitosamente' })
   @ApiResponse({ status: 400, description: 'Datos inválidos' })
@@ -52,7 +55,9 @@ export class StrategyController {
   }
 
   @Post('report')
-  @RequirePermission(Permission.STRATEGY_WRITE)
+  @CheckPolicies((ability, req) =>
+    ability.can('write', subject('Strategy', { productId: req.body.productId }))
+  )
   @ApiOperation({ summary: 'Reportar avance' })
   @ApiResponse({ status: 201, description: 'Avance reportado exitosamente' })
   @ApiResponse({ status: 400, description: 'Datos inválidos' })
@@ -62,7 +67,9 @@ export class StrategyController {
   }
 
   @Patch('project/:productId/assignments/:assignmentId/target')
-  @RequirePermission(Permission.STRATEGY_WRITE)
+  @CheckPolicies((ability, req) =>
+    ability.can('write', subject('Strategy', { productId: req.params.productId }))
+  )
   @ApiOperation({ summary: 'Actualizar meta comprometida de una asignación estratégica' })
   @ApiParam({ name: 'productId', type: String, description: 'UUID del producto' })
   @ApiParam({ name: 'assignmentId', type: String, description: 'UUID de la asignación producto-indicador' })
@@ -78,7 +85,7 @@ export class StrategyController {
   }
 
   @Get('tree')
-  @RequirePermission(Permission.STRATEGY_READ)
+  @CheckPolicies((ability) => ability.can('read', 'Strategy'))
   @ApiOperation({ summary: 'Obtener árbol estratégico completo' })
   @ApiResponse({ status: 200, description: 'Árbol estratégico' })
   @ApiResponse({ status: 401, description: 'No autenticado' })
@@ -87,20 +94,16 @@ export class StrategyController {
   }
 
   @Get('timeline')
-  @RequirePermission(Permission.STRATEGY_READ)
+  @CheckPolicies((ability) => ability.can('read', 'Strategy'))
   @ApiOperation({ summary: 'Obtener timeline consolidado de indicadores' })
-  @ApiResponse({
-    status: 200,
-    description: 'Timeline consolidado por indicador → workpackage → producto → tareas',
-    type: StrategyTimelineResponseDto,
-  })
+  @ApiResponse({ status: 200, description: 'Timeline consolidado', type: StrategyTimelineResponseDto })
   @ApiResponse({ status: 401, description: 'No autenticado' })
   getTimeline(@Query() query: StrategyTimelineQueryDto) {
     return this.service.getIndicatorTimeline(query);
   }
 
   @Get('project/:productId')
-  @RequirePermission(Permission.STRATEGY_READ)
+  @CheckPolicies((ability) => ability.can('read', 'Strategy'))
   @ApiOperation({ summary: 'Obtener matriz estratégica del producto' })
   @ApiParam({ name: 'productId', type: String, description: 'UUID del producto' })
   @ApiResponse({ status: 200, description: 'Matriz estratégica del producto' })

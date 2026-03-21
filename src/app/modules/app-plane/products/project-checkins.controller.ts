@@ -19,26 +19,25 @@ import {
   ApiParam,
   ApiQuery,
 } from '@nestjs/swagger';
+import { subject } from '@casl/ability';
 import { ProjectCheckInsService } from './project-checkins.service';
 import { CreateCheckInDto } from './dto/create-checkin.dto';
 import { UpdateCheckInDto } from './dto/update-checkin.dto';
 import { CompleteCheckInDto } from './dto/complete-checkin.dto';
-import { RequirePermission } from '../../../common/decorators/require-permission.decorator';
-import { Permission } from '../../../common/enums/business-roles.enum';
-import { HybridPermissionsGuard } from '../../../common/guards/hybrid-permissions.guard';
 import { AuthenticatedGuard } from '../../../common/guards/authenticated.guard';
 import { TenantAccessGuard } from '../../../common/guards/tenant-access.guard';
+import { PoliciesGuard } from '../../../common/guards/policies.guard';
+import { CheckPolicies } from '../../../common/decorators/check-policies.decorator';
 
 @ApiTags('Check-ins')
 @ApiCookieAuth()
 @Controller('checkins')
-@UseGuards(AuthenticatedGuard, TenantAccessGuard, HybridPermissionsGuard)
+@UseGuards(AuthenticatedGuard, TenantAccessGuard, PoliciesGuard)
 export class ProjectCheckInsController {
   constructor(private readonly service: ProjectCheckInsService) {}
 
-  /** GET /checkins/product/:productId — lista de check-ins del producto */
   @Get('product/:productId')
-  @RequirePermission(Permission.CHECKIN_READ)
+  @CheckPolicies((ability) => ability.can('read', 'CheckIn'))
   @ApiOperation({ summary: 'Listar check-ins de un producto (próximo, upcoming, pasados)' })
   @ApiParam({ name: 'productId', type: String })
   @ApiQuery({ name: 'pastPage', required: false, type: Number })
@@ -55,26 +54,25 @@ export class ProjectCheckInsController {
     );
   }
 
-  /** GET /checkins/my — próximos check-ins del usuario autenticado (cross-product) */
   @Get('my')
-  @RequirePermission(Permission.CHECKIN_READ)
+  @CheckPolicies((ability) => ability.can('read', 'CheckIn'))
   @ApiOperation({ summary: 'Próximos check-ins del usuario (todos los productos)' })
   getMyUpcomingCheckins(@Request() req) {
     return this.service.getMyUpcomingCheckins(req.workspaceMember?.id);
   }
 
-  /** GET /checkins/:id — detalle de un check-in */
   @Get(':id')
-  @RequirePermission(Permission.CHECKIN_READ)
+  @CheckPolicies((ability) => ability.can('read', 'CheckIn'))
   @ApiOperation({ summary: 'Obtener check-in por ID' })
   @ApiParam({ name: 'id', type: String })
   findOne(@Param('id', ParseUUIDPipe) id: string) {
     return this.service.findOne(id);
   }
 
-  /** POST /checkins — programar nuevo check-in */
   @Post()
-  @RequirePermission(Permission.CHECKIN_WRITE)
+  @CheckPolicies((ability, req) =>
+    ability.can('create', subject('CheckIn', { productId: req.body.productId }))
+  )
   @ApiOperation({ summary: 'Programar check-in' })
   @ApiResponse({ status: 201, description: 'Check-in programado exitosamente' })
   create(@Body() dto: CreateCheckInDto, @Request() req) {
@@ -84,9 +82,11 @@ export class ProjectCheckInsController {
     });
   }
 
-  /** PATCH /checkins/:id — actualizar check-in (reprogramar, editar) */
+  // PATCH /:id — sin productId en el request.
+  // Verificación condition-less: el usuario puede update en ALGÚN check-in.
+  // El servicio valida ownership específico.
   @Patch(':id')
-  @RequirePermission(Permission.CHECKIN_WRITE)
+  @CheckPolicies((ability) => ability.can('update', 'CheckIn'))
   @ApiOperation({ summary: 'Actualizar check-in' })
   @ApiParam({ name: 'id', type: String })
   update(
@@ -100,9 +100,9 @@ export class ProjectCheckInsController {
     });
   }
 
-  /** PATCH /checkins/:id/complete — marcar completado con minutas */
+  // PATCH /:id/complete — sin productId en el request.
   @Patch(':id/complete')
-  @RequirePermission(Permission.CHECKIN_WRITE)
+  @CheckPolicies((ability) => ability.can('update', 'CheckIn'))
   @ApiOperation({ summary: 'Completar check-in y guardar minutas' })
   @ApiParam({ name: 'id', type: String })
   complete(
@@ -116,9 +116,9 @@ export class ProjectCheckInsController {
     });
   }
 
-  /** DELETE /checkins/:id */
+  // DELETE /:id — sin productId en el request.
   @Delete(':id')
-  @RequirePermission(Permission.CHECKIN_WRITE)
+  @CheckPolicies((ability) => ability.can('delete', 'CheckIn'))
   @ApiOperation({ summary: 'Eliminar check-in' })
   @ApiParam({ name: 'id', type: String })
   remove(@Param('id', ParseUUIDPipe) id: string, @Request() req) {

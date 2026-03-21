@@ -1,8 +1,7 @@
-import { MongoAbility } from '@casl/ability';
+import { MongoAbility, ForcedSubject } from '@casl/ability';
 
-// ─── Subjects ────────────────────────────────────────────────────────────────
-// Strings literales — sin dependencias circulares con las entidades TypeORM.
-export type AppSubjects =
+// ─── Subject names ────────────────────────────────────────────────────────────
+export type AppSubjectNames =
   | 'Product'
   | 'Task'
   | 'Strategy'
@@ -11,7 +10,17 @@ export type AppSubjects =
   | 'ProductMember'
   | 'WorkspaceMember'
   | 'Catalog'
-  | 'FieldDefinition'
+  | 'FieldDefinition';
+
+// ─── Subjects ─────────────────────────────────────────────────────────────────
+// Incluye tanto strings literales como objetos con ForcedSubject para que
+// subject('Product', { id }) sea assignable al tipo AppAbility.can().
+// Record<string, any> (no unknown) es necesario porque los objetos devueltos
+// por subject() no tienen index signature, y any es bi-direccional en TS.
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+export type AppSubjects =
+  | AppSubjectNames
+  | (Record<string, any> & ForcedSubject<AppSubjectNames>)
   | 'all';
 
 // ─── Actions ─────────────────────────────────────────────────────────────────
