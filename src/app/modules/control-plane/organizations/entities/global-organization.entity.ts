@@ -7,20 +7,15 @@ export class GlobalOrganization {
   id: string;
 
   @Column({ unique: true })
-  name: string; 
+  name: string;
 
-  @Column({ type: 'text', nullable: true })
-  description: string; // 👈 Nuevo: Descripción de la ONG
-
-  @Column({ unique: true })
-  tax_id: string; // RUC, NIT, RFC (Identificador único)
-  
   // --- 🌍 RELACIÓN CON PAÍS ---
-  @Column({ name: 'country_id', nullable: true }) // Nullable al inicio por si migras datos viejos
+  // Stores the ISO 3166-1 alpha-2 code (e.g. 'MX', 'US') — FK to global_countries.code
+  @Column({ name: 'country_id', type: 'varchar', length: 2, nullable: true })
   countryId: string;
 
   @ManyToOne(() => GlobalCountry)
-  @JoinColumn({ name: 'country_id' })
+  @JoinColumn({ name: 'country_id', referencedColumnName: 'code' })
   country: GlobalCountry;
   // -----------------------------
 

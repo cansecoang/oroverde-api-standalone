@@ -96,7 +96,6 @@ export class AbilityFactory {
           can('create', 'Product');
           can('update', 'Product', { id: pid } as any);
           can('delete', 'Product', { id: pid } as any);
-          can('review', 'ProductRequest');
           can('manage', 'ProductMember', { productId: pid } as any);
           can('manage', 'Task', { productId: pid } as any);
           can('write', 'Strategy', { productId: pid } as any);

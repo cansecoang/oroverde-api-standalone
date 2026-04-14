@@ -7,21 +7,21 @@ export class UpdateUserDto {
   @IsOptional()
   email?: string;
 
-  @ApiPropertyOptional({ description: 'Nombre', example: 'Carlos' })
+  @ApiPropertyOptional({ description: 'Nombre (firstName)', example: 'Carlos' })
   @IsString()
   @IsOptional()
-  first_name?: string;
+  firstName?: string;
 
-  @ApiPropertyOptional({ description: 'Apellido', example: 'López' })
+  @ApiPropertyOptional({ description: 'Apellido (lastName)', example: 'López' })
   @IsString()
   @IsOptional()
-  last_name?: string;
+  lastName?: string;
 
   @ApiPropertyOptional({
-    description: 'UUID de la organización global',
+    description: 'UUID de la organización global (organizationId)',
     example: '550e8400-e29b-41d4-a716-446655440000',
   })
-  @IsUUID('4', { message: 'organization_id debe ser un UUID válido' })
+  @IsUUID('4', { message: 'organizationId debe ser un UUID válido' })
   @IsOptional()
-  organization_id?: string;
+  organizationId?: string;
 }

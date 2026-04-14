@@ -1,0 +1,54 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# docker-compose.infra.yml
+# Levanta SOLO la infraestructura de desarrollo local:
+#   - PostgreSQL 16  → localhost:5432  (user: oroverde, pass: oroverde_dev)
+#   - Redis 7        → localhost:6379  (pass: oroverde_dev)
+#
+# La API NestJS corre en el host con: npm run start:dev
+# Esto permite hot-reload nativo sin rebuilds de Docker.
+#
+# Uso:
+#   docker compose -f docker-compose.infra.yml up -d
+#   docker compose -f docker-compose.infra.yml down
+#   docker compose -f docker-compose.infra.yml logs -f
+# ─────────────────────────────────────────────────────────────────────────────
+
+services:
+  postgres:
+    image: postgres:17-alpine
+    container_name: oroverde-pg-dev
+    environment:
+      POSTGRES_USER: oroverde
+      POSTGRES_PASSWORD: oroverde_dev
+      POSTGRES_DB: control_plane
+      # Trust auth para conexiones locales de desarrollo — no requiere SCRAM
+      POSTGRES_HOST_AUTH_METHOD: trust
+    ports:
+      - "5432:5432"
+    volumes:
+      - oroverde_pg_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U oroverde -d control_plane"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    container_name: oroverde-redis-dev
+    command: redis-server --requirepass "ov?559433"
+    ports:
+      - "6379:6379"
+    volumes:
+      - oroverde_redis_data:/data
+    healthcheck:
+      test: ["CMD-SHELL", "redis-cli -a 'ov?559433' ping | grep -q PONG"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  oroverde_pg_data:
+    driver: local
+  oroverde_redis_data:
+    driver: local

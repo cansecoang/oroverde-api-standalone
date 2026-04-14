@@ -6,6 +6,7 @@ import { AuthService } from './auth.service';
 import { LocalStrategy } from './local.strategy';
 import { SessionSerializer } from './session.serializer';
 import { AuthController } from './auth.controller';
+import { SessionService } from '../../common/services/session.service';
 
 // Entidades y Módulos externos
 import { GlobalUser } from '../control-plane/users/entities/user.entity';
@@ -27,9 +28,10 @@ import { ControlPlaneModule } from '../control-plane/control-plane.module';
     // ❌ BORRADO: Repository (No es un módulo)
   ],
   providers: [
-    AuthService, 
-    LocalStrategy, 
-    SessionSerializer
+    AuthService,
+    LocalStrategy,
+    SessionSerializer,
+    SessionService,  // DT-005: invalidación de sesiones al cambiar contraseña
   ],
   controllers: [
     AuthController,

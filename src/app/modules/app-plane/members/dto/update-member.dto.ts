@@ -15,8 +15,4 @@ export class UpdateMemberDto {
   @IsOptional()
   role?: TenantRole;
 
-  @ApiPropertyOptional({ description: 'Alias o cargo del miembro', example: 'Coordinador Regional' })
-  @IsString()
-  @IsOptional()
-  alias?: string;
 }

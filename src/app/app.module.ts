@@ -2,9 +2,8 @@ import { Module, MiddlewareConsumer, NestModule } from '@nestjs/common';
 import { ConfigModule, ConfigService } from '@nestjs/config';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { MailerModule } from '@nestjs-modules/mailer';
-import { ThrottlerModule, ThrottlerGuard } from '@nestjs/throttler';
+import { ThrottlerModule } from '@nestjs/throttler';
 import { EventEmitterModule } from '@nestjs/event-emitter';
-import { APP_GUARD } from '@nestjs/core';
 
 import { AppController } from './app.controller';
 import { AppService } from './app.service';
@@ -34,8 +33,13 @@ import { TenantMiddleware } from './common/middleware/tenant.middleware';
       envFilePath: '.env',
     }),
 
-    // Rate Limiting global: 60 requests por minuto por IP
-    ThrottlerModule.forRoot([{ ttl: 60000, limit: 60 }]),
+    // Rate Limiting:
+    // - global: 60 req / 60s por IP (todos los endpoints)
+    // - login:  5 intentos / 900s (15 min) por IP — DT-004
+    ThrottlerModule.forRoot([
+      { name: 'global', ttl: 60000, limit: 60 },
+      { name: 'login', ttl: 900000, limit: 5 },
+    ]),
 
     TypeOrmModule.forRootAsync({
       imports: [ConfigModule],
@@ -98,9 +102,6 @@ import { TenantMiddleware } from './common/middleware/tenant.middleware';
   controllers: [AppController],
   providers: [
     AppService,
-    // M-5: Activar rate limiting globalmente (60 req/min por IP)
-    { provide: APP_GUARD, useClass: ThrottlerGuard },
-
   ],
 })
 export class AppModule implements NestModule {

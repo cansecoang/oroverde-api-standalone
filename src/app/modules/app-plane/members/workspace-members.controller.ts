@@ -1,4 +1,4 @@
-import { Controller, Get, Post, Patch, Body, Param, UseGuards, Query, Req, ParseUUIDPipe, HttpCode, HttpStatus } from '@nestjs/common';
+import { Controller, Get, Post, Patch, Delete, Body, Param, UseGuards, Query, Req, ParseUUIDPipe, HttpCode, HttpStatus } from '@nestjs/common';
 import { ApiTags, ApiCookieAuth, ApiOperation, ApiResponse, ApiQuery, ApiParam } from '@nestjs/swagger';
 import { WorkspaceMembersService } from './workspace-members.service';
 import { InviteMemberDto } from './dto/invite-member.dto';
@@ -52,6 +52,18 @@ export class WorkspaceMembersController {
     @Req() req: any,
   ) {
     return this.service.updateMember(id, dto, req.workspaceMember?.id);
+  }
+
+  @Delete(':id')
+  @CheckPolicies((ability) => ability.can('manage', 'WorkspaceMember'))
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: 'Retirar miembro del workspace' })
+  @ApiParam({ name: 'id', description: 'UUID del workspace member' })
+  @ApiResponse({ status: 200, description: 'Miembro retirado correctamente' })
+  @ApiResponse({ status: 400, description: 'Auto-retiro / último coordinador' })
+  @ApiResponse({ status: 404, description: 'Miembro no encontrado' })
+  removeMember(@Param('id', ParseUUIDPipe) id: string, @Req() req: any) {
+    return this.service.removeMember(id, req.user?.id, req.workspaceMember?.id);
   }
 
   @Get()

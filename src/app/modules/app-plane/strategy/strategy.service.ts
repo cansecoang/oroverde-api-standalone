@@ -6,6 +6,8 @@ import { ProductStrategy } from './entities/product-strategy.entity';
 import { StrategyValue } from './entities/strategy-value.entity';
 import { CreateOutputDto } from './dto/create-output.dto';
 import { CreateIndicatorDto } from './dto/create-indicator.dto';
+import { UpdateIndicatorDto } from './dto/update-indicator.dto';
+import { UpdateOutputDto } from './dto/update-output.dto';
 import { AssignStrategyDto } from './dto/assign-strategy.dto';
 import { ReportProgressDto } from './dto/report-progress.dto';
 import { StrategyTimelineQueryDto } from './dto/strategy-timeline-query.dto';
@@ -144,6 +146,43 @@ export class StrategyService {
         output: output
     });
     return indRepo.save(indicator);
+  }
+
+  async updateOutput(id: string, dto: UpdateOutputDto) {
+    const dataSource = await this.tenantConnection.getTenantConnection();
+    const repo = dataSource.getRepository(StrategicOutput);
+    const output = await repo.findOne({ where: { id } });
+    if (!output) throw new NotFoundException('Output no encontrado.');
+
+    if (dto.order !== undefined && dto.order !== output.order) {
+      const conflict = await repo.findOne({ where: { order: dto.order } });
+      if (conflict && conflict.id !== id) {
+        throw new BadRequestException(`Ya existe un Output con el orden ${dto.order}.`);
+      }
+      output.code = `Output ${dto.order}`;
+      output.order = dto.order;
+    }
+    if (dto.name !== undefined) output.name = dto.name;
+    if (dto.description !== undefined) output.description = dto.description;
+    return repo.save(output);
+  }
+
+  async updateIndicator(id: string, dto: UpdateIndicatorDto) {
+    const dataSource = await this.tenantConnection.getTenantConnection();
+    const repo = dataSource.getRepository(StrategicIndicator);
+    const indicator = await repo.findOne({ where: { id } });
+    if (!indicator) throw new NotFoundException('Indicador no encontrado.');
+
+    if (dto.description !== undefined) indicator.description = dto.description;
+    if (dto.unit !== undefined) indicator.unit = dto.unit;
+    if (dto.total_target !== undefined) indicator.total_target = dto.total_target;
+    if (dto.plannedCompletionDate !== undefined) {
+      (indicator as any).plannedCompletionDate = dto.plannedCompletionDate || null;
+    }
+    if (dto.actualCompletionDate !== undefined) {
+      (indicator as any).actualCompletionDate = dto.actualCompletionDate || null;
+    }
+    return repo.save(indicator);
   }
 
   // 👇 RENOMBRADO: Asignar Proyecto a Indicador
@@ -345,7 +384,7 @@ export class StrategyService {
              st.name AS status_name,
              CASE WHEN ${this.completedTaskPredicateSql('st')} THEN TRUE ELSE FALSE END AS is_completed,
              ph.name AS phase_name,
-             wm.full_name AS assignee_name,
+             TRIM(COALESCE(wm.first_name, '') || ' ' || COALESCE(wm.last_name, '')) AS assignee_name,
              wm.email AS assignee_email
            FROM tasks t
            LEFT JOIN catalog_items st ON st.id = t.status_id

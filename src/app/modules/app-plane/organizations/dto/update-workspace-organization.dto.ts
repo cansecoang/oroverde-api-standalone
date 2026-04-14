@@ -1,19 +1,16 @@
-import { IsString, IsOptional, IsEmail } from 'class-validator';
+import { IsOptional, IsEnum, ValidateIf } from 'class-validator';
 import { ApiPropertyOptional } from '@nestjs/swagger';
+import { WorkspaceOrgType } from '../entities/workspace-organization.entity';
 
 export class UpdateWorkspaceOrganizationDto {
-  @ApiPropertyOptional({ description: 'Nombre de la organización', example: 'Cooperativa Verde' })
-  @IsString()
+  @ApiPropertyOptional({
+    description: 'Tipo de organización (MAIN | PARTNER | null para limpiar)',
+    enum: WorkspaceOrgType,
+    nullable: true,
+    example: WorkspaceOrgType.PARTNER,
+  })
   @IsOptional()
-  name?: string;
-
-  @ApiPropertyOptional({ description: 'Tipo de organización', example: 'ONG' })
-  @IsString()
-  @IsOptional()
-  type?: string;
-
-  @ApiPropertyOptional({ description: 'Correo de contacto', example: 'info@cooperativa.org' })
-  @IsEmail()
-  @IsOptional()
-  contact_email?: string;
+  @ValidateIf((o) => o.type !== null)
+  @IsEnum(WorkspaceOrgType)
+  type?: WorkspaceOrgType | null;
 }

@@ -20,8 +20,4 @@ export class InviteMemberDto {
   @IsNotEmpty()
   role: TenantRole;
 
-  @ApiPropertyOptional({ description: 'Alias o cargo del miembro', example: 'Jefe de Campo' })
-  @IsString()
-  @IsOptional()
-  alias?: string;
 }

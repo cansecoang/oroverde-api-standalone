@@ -119,7 +119,8 @@ export class ProductsController {
   }
 
   // getCapabilities usa req.ability que PoliciesGuard inyecta en el request.
-  // El servicio lo recibe en lugar de recalcular la lógica de roles.
+  // El servicio calcula las capabilities; el controller agrega abilityRules
+  // para que el frontend pueda reconstruir el AppAbility sin extra requests.
   @Get('capabilities')
   @CheckPolicies((ability) => ability.can('read', 'Product'))
   @ApiOperation({ summary: 'Capacidades del usuario actual sobre Productos' })
@@ -131,11 +132,16 @@ export class ProductsController {
         canCreateProduct: { type: 'boolean' },
         canRequestProduct: { type: 'boolean' },
         pendingRequestsCount: { type: 'number' },
+        abilityRules: { type: 'array', description: 'Reglas CASL serializadas para el frontend' },
       },
     },
   })
-  getCapabilities(@Request() req) {
-    return this.productsService.getCapabilities(req.ability);
+  async getCapabilities(@Request() req) {
+    const caps = await this.productsService.getCapabilities(req.ability);
+    return {
+      ...caps,
+      abilityRules: req.ability?.rules ?? [],
+    };
   }
 
   @Get('my')

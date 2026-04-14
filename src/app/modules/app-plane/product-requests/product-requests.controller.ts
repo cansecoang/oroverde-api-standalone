@@ -65,6 +65,15 @@ export class ProductRequestsController {
     });
   }
 
+  @Get('my-requests')
+  @CheckPolicies((ability) => ability.can('create', 'ProductRequest'))
+  @ApiOperation({ summary: 'Listar mis solicitudes de creación (Member / Developer_Worker)' })
+  @ApiResponse({ status: 200, description: 'Lista de solicitudes del miembro autenticado' })
+  @ApiResponse({ status: 403, description: 'No autorizado' })
+  getMyRequests(@Request() req) {
+    return this.productRequestsService.getMyRequests(req.workspaceMember.id);
+  }
+
   @Get('pending-count')
   @CheckPolicies((ability) => ability.can('review', 'ProductRequest'))
   @ApiOperation({ summary: 'Cantidad de solicitudes en estado PENDING (para badge de revisores)' })
@@ -72,6 +81,21 @@ export class ProductRequestsController {
   @ApiResponse({ status: 403, description: 'No autorizado' })
   getPendingCount() {
     return this.productRequestsService.getPendingCount();
+  }
+
+  @Get(':id')
+  @CheckPolicies((ability) => ability.can('review', 'ProductRequest'))
+  @ApiOperation({ summary: 'Obtener detalle enriquecido de una solicitud (GC)' })
+  @ApiParam({ name: 'id', type: String, description: 'UUID de la solicitud' })
+  @ApiResponse({ status: 200, description: 'Solicitud con datos enriquecidos' })
+  @ApiResponse({ status: 403, description: 'No autorizado' })
+  @ApiResponse({ status: 404, description: 'Solicitud no encontrada' })
+  getRequestById(@Param('id', ParseUUIDPipe) id: string, @Request() req) {
+    return this.productRequestsService.getRequestById(
+      id,
+      req.workspaceMember.id,
+      req.workspaceMember.tenantRole,
+    );
   }
 
   @Patch(':id/review')

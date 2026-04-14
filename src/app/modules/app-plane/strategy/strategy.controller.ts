@@ -8,6 +8,8 @@ import { PoliciesGuard } from '../../../common/guards/policies.guard';
 import { CheckPolicies } from '../../../common/decorators/check-policies.decorator';
 import { CreateOutputDto } from './dto/create-output.dto';
 import { CreateIndicatorDto } from './dto/create-indicator.dto';
+import { UpdateIndicatorDto } from './dto/update-indicator.dto';
+import { UpdateOutputDto } from './dto/update-output.dto';
 import { AssignStrategyDto } from './dto/assign-strategy.dto';
 import { ReportProgressDto } from './dto/report-progress.dto';
 import { UpdateStrategyTargetDto } from './dto/update-strategy-target.dto';
@@ -40,6 +42,28 @@ export class StrategyController {
   @ApiResponse({ status: 401, description: 'No autenticado' })
   createIndicator(@Body() dto: CreateIndicatorDto) {
     return this.service.createIndicator(dto);
+  }
+
+  @Patch('outputs/:id')
+  @CheckPolicies((ability) => ability.can('globalWrite', 'Strategy'))
+  @ApiOperation({ summary: 'Actualizar output estratégico' })
+  @ApiParam({ name: 'id', type: String })
+  updateOutput(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: UpdateOutputDto,
+  ) {
+    return this.service.updateOutput(id, dto);
+  }
+
+  @Patch('indicators/:id')
+  @CheckPolicies((ability) => ability.can('globalWrite', 'Strategy'))
+  @ApiOperation({ summary: 'Actualizar indicador estratégico' })
+  @ApiParam({ name: 'id', type: String })
+  updateIndicator(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: UpdateIndicatorDto,
+  ) {
+    return this.service.updateIndicator(id, dto);
   }
 
   @Post('assign')

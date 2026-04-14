@@ -16,8 +16,11 @@ export class WorkspaceMember {
   @Column()
   email: string;
 
-  @Column()
-  full_name: string;
+  @Column({ nullable: true })
+  first_name: string;
+
+  @Column({ nullable: true })
+  last_name: string;
 
   // 👇 3. LA AFILIACIÓN LOCAL
   // "En este tenant, este usuario trabaja para..."
@@ -35,9 +38,6 @@ export class WorkspaceMember {
     default: TenantRole.MEMBER 
   })
   tenantRole: TenantRole; 
-
-  @Column({ nullable: true })
-  alias: string;
 
   @CreateDateColumn()
   createdAt: Date;

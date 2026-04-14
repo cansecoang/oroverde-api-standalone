@@ -352,7 +352,7 @@ export class ProductsService {
       );
     } else if (effectiveGroupBy === 'responsible_member') {
       qb.addOrderBy(
-        `(SELECT MIN(wm.full_name)
+        `(SELECT MIN(wm.last_name || ' ' || wm.first_name)
           FROM product_members pm
           JOIN workspace_members wm ON wm.id = pm.member_id
           WHERE pm.product_id = product.id
@@ -1298,12 +1298,10 @@ export class ProductsService {
       field_key: string;
       organization_id: string;
       org_name: string;
-      org_tax_id: string;
     }> = await dataSource.query(
       `SELECT pfd.key AS field_key,
               pcol.organization_id,
-              wo.name AS org_name,
-              wo.tax_id AS org_tax_id
+              wo.name AS org_name
        FROM product_custom_org_links pcol
        JOIN product_field_definitions pfd ON pcol.field_definition_id = pfd.id
        JOIN workspace_organizations wo ON pcol.organization_id = wo.id
@@ -1317,7 +1315,6 @@ export class ProductsService {
       result[row.field_key].push({
         id: row.organization_id,
         name: row.org_name,
-        taxId: row.org_tax_id,
       });
     }
 

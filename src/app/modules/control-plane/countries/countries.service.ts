@@ -1,6 +1,7 @@
-import { Injectable, ConflictException, NotFoundException } from '@nestjs/common';
+import { Injectable, ConflictException, NotFoundException, Logger } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
+import { EventEmitter2 } from '@nestjs/event-emitter';
 import { GlobalCountry } from './entities/country.entity';
 import { CreateGlobalCountryDto } from './dto/create-global-country.dto';
 import { UpdateGlobalCountryDto } from './dto/update-global-country.dto';
@@ -8,9 +9,12 @@ import { ALL_COUNTRIES_SEED } from './seed/all-countries.seed';
 
 @Injectable()
 export class CountriesService {
+  private readonly logger = new Logger(CountriesService.name);
+
   constructor(
     @InjectRepository(GlobalCountry, 'default')
     private readonly repo: Repository<GlobalCountry>,
+    private readonly eventEmitter: EventEmitter2,
   ) {}
 
   async findAll(): Promise<GlobalCountry[]> {
@@ -34,12 +38,21 @@ export class CountriesService {
     const country = await this.findByCode(code);
     if (dto.code) dto.code = dto.code.toUpperCase();
     Object.assign(country, dto);
-    return this.repo.save(country);
+    const saved = await this.repo.save(country);
+    this.eventEmitter.emit('country.updated', {
+      code: saved.code,
+      name: saved.name,
+      timezone: saved.timezone ?? null,
+    });
+    this.logger.log(`Evento 'country.updated' emitido para ${saved.code}`);
+    return saved;
   }
 
   async remove(code: string): Promise<void> {
     const country = await this.findByCode(code);
     await this.repo.remove(country);
+    this.eventEmitter.emit('country.deleted', { code: country.code });
+    this.logger.log(`Evento 'country.deleted' emitido para ${country.code}`);
   }
 
   /**
