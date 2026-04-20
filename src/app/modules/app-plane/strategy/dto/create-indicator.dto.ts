@@ -17,15 +17,16 @@ export class CreateIndicatorDto {
   @IsNotEmpty()
   description: string;
 
-  @ApiProperty({ description: 'Unidad de medida', example: 'Personas' })
+  @ApiPropertyOptional({ description: 'Unidad de medida', example: 'Personas' })
   @IsString()
-  @IsNotEmpty()
-  unit: string;
+  @IsOptional()
+  unit?: string;
 
-  @ApiProperty({ description: 'Meta total del indicador', example: 500, minimum: 0 })
+  @ApiPropertyOptional({ description: 'Meta total del indicador', example: 500, minimum: 0 })
   @IsNumber({}, { message: 'La meta total debe ser un número' })
   @Min(0)
-  total_target: number;
+  @IsOptional()
+  total_target?: number;
 
   @ApiPropertyOptional({ description: 'Fecha de cumplimiento planificada (ISO)', example: '2026-12-31' })
   @IsDateString()
