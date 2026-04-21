@@ -29,6 +29,8 @@ export class TasksController {
     return this.service.create(dto, {
       workspaceMemberId: req.workspaceMember?.id,
       tenantRole: req.workspaceMember?.tenantRole,
+      ipAddress: req.ip,
+      userAgent: req.get('user-agent'),
     });
   }
 
@@ -50,6 +52,8 @@ export class TasksController {
     return this.service.updateStatus(id, dto, {
       workspaceMemberId: req.workspaceMember?.id,
       tenantRole: req.workspaceMember?.tenantRole,
+      ipAddress: req.ip,
+      userAgent: req.get('user-agent'),
     });
   }
 
@@ -70,6 +74,8 @@ export class TasksController {
     return this.service.update(id, dto, {
       workspaceMemberId: req.workspaceMember?.id,
       tenantRole: req.workspaceMember?.tenantRole,
+      ipAddress: req.ip,
+      userAgent: req.get('user-agent'),
     });
   }
 
@@ -89,6 +95,8 @@ export class TasksController {
     return this.service.remove(id, {
       workspaceMemberId: req.workspaceMember?.id,
       tenantRole: req.workspaceMember?.tenantRole,
+      ipAddress: req.ip,
+      userAgent: req.get('user-agent'),
     });
   }
 

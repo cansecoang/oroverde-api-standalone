@@ -1,4 +1,5 @@
 import { Injectable, Scope, NotFoundException, BadRequestException, ForbiddenException } from '@nestjs/common';
+import { EntityManager } from 'typeorm';
 import { TenantConnectionService } from '../../tenancy/tenant-connection.service';
 import { Task } from './entities/task.entity';
 import { ProductMember } from '../products/entities/product-member.entity';
@@ -15,6 +16,8 @@ const SUPER_ADMIN_SENTINEL_ID = '00000000-0000-0000-0000-000000000000';
 type TaskActorContext = {
   workspaceMemberId?: string;
   tenantRole?: string;
+  ipAddress?: string;
+  userAgent?: string;
 };
 
 @Injectable({ scope: Scope.REQUEST })
@@ -26,41 +29,37 @@ export class TasksService {
 
   async create(dto: CreateTaskDto, actor?: TaskActorContext) {
     const ds = await this.tenantConnection.getTenantConnection();
-    const repo = ds.getRepository(Task);
 
-    await this.normalizeTaskAssignment(
+    await this.normalizeTaskAssignment(ds, dto.productId, dto, {});
+
+    this.validateDateCoherence(dto.startDate, dto.endDate);
+
+    const task = ds.getRepository(Task).create(dto);
+
+    const saved = await this.withAuditLog<Task>(
       ds,
-      dto.productId,
-      dto,
-      {},
-    );
-
-    const task = repo.create(dto);
-    const saved = await repo.save(task);
-
-    const qr = ds.createQueryRunner();
-    await qr.connect();
-    await qr.startTransaction();
-    try {
-      const auditLog = qr.manager.create(AuditLog, {
+      (manager) => manager.save(Task, task) as Promise<Task>,
+      (result) => ({
         actorMemberId: actor?.workspaceMemberId ?? null,
         entity: 'task',
-        entityId: saved.id,
+        entityId: result.id,
         action: 'CREATE',
-        changes: { title: saved.title, productId: saved.productId },
-      });
-      await qr.manager.save(AuditLog, auditLog);
-      await qr.commitTransaction();
-    } catch {
-      await qr.rollbackTransaction();
-    } finally {
-      await qr.release();
-    }
+        changes: {
+          title: result.title,
+          productId: result.productId,
+          assigneeMemberId: result.assigneeMemberId ?? null,
+          phaseId: result.phaseId ?? null,
+          statusId: result.statusId ?? null,
+          startDate: result.startDate ?? null,
+          endDate: result.endDate ?? null,
+        },
+        ip_address: actor?.ipAddress ?? null,
+        user_agent: actor?.userAgent ?? null,
+      }),
+    );
 
-    // Fallback to saved entity if relation loading fails (e.g. DISTINCT subquery bug in old dist)
     const result = await this.findOneWithRelations(ds, saved.id).catch(() => saved);
 
-    // Best-effort: notification failures must never break task creation.
     if (saved.assigneeMemberId) {
       void this.notifyTaskAssignee(ds, saved);
     }
@@ -81,15 +80,13 @@ export class TasksService {
 
     const previousStatusId = task.statusId;
 
-    const queryRunner = ds.createQueryRunner();
-    await queryRunner.connect();
-    await queryRunner.startTransaction();
-
-    try {
-      task.statusId = dto.statusId;
-      await queryRunner.manager.save(Task, task);
-
-      const auditLog = queryRunner.manager.create(AuditLog, {
+    await this.withAuditLog<Task>(
+      ds,
+      (manager) => {
+        task.statusId = dto.statusId;
+        return manager.save(Task, task) as Promise<Task>;
+      },
+      () => ({
         actorMemberId: actor?.workspaceMemberId ?? null,
         entity: 'task',
         entityId: id,
@@ -98,16 +95,10 @@ export class TasksService {
           old: { statusId: previousStatusId },
           new: { statusId: dto.statusId },
         },
-      });
-      await queryRunner.manager.save(AuditLog, auditLog);
-
-      await queryRunner.commitTransaction();
-    } catch (err) {
-      await queryRunner.rollbackTransaction();
-      throw err;
-    } finally {
-      await queryRunner.release();
-    }
+        ip_address: actor?.ipAddress ?? null,
+        user_agent: actor?.userAgent ?? null,
+      }),
+    );
 
     return this.findOneWithRelations(ds, id);
   }
@@ -127,38 +118,39 @@ export class TasksService {
     // Prevent moving task to another product
     delete updateData['productId'];
 
-    await this.normalizeTaskAssignment(
+    await this.normalizeTaskAssignment(ds, task.productId, updateData, {
+      currentAssigneeMemberId: task.assigneeMemberId ?? null,
+      currentAssignedOrganizationId: task.assignedOrganizationId ?? null,
+    });
+
+    const effectiveStartDate = 'startDate' in updateData ? updateData.startDate : task.startDate;
+    const effectiveEndDate = 'endDate' in updateData ? updateData.endDate : task.endDate;
+    const effectiveActualStart = 'actualStartDate' in updateData ? updateData.actualStartDate : task.actualStartDate;
+    const effectiveActualEnd = 'actualEndDate' in updateData ? updateData.actualEndDate : task.actualEndDate;
+    this.validateDateCoherence(effectiveStartDate, effectiveEndDate, effectiveActualStart, effectiveActualEnd);
+
+    const oldSnapshot = {
+      title: task.title,
+      statusId: task.statusId,
+      assigneeMemberId: task.assigneeMemberId,
+    };
+
+    const saved = await this.withAuditLog<Task>(
       ds,
-      task.productId,
-      updateData,
-      {
-        currentAssigneeMemberId: task.assigneeMemberId ?? null,
-        currentAssignedOrganizationId: task.assignedOrganizationId ?? null,
+      (manager) => {
+        repo.merge(task, updateData);
+        return manager.save(Task, task) as Promise<Task>;
       },
-    );
-
-    const oldSnapshot = { title: task.title, statusId: task.statusId, assigneeMemberId: task.assigneeMemberId };
-    repo.merge(task, updateData);
-    const saved = await repo.save(task);
-
-    const qr = ds.createQueryRunner();
-    await qr.connect();
-    await qr.startTransaction();
-    try {
-      const auditLog = qr.manager.create(AuditLog, {
+      () => ({
         actorMemberId: actor?.workspaceMemberId ?? null,
         entity: 'task',
-        entityId: saved.id,
+        entityId: id,
         action: 'UPDATE',
         changes: { old: oldSnapshot, new: updateData },
-      });
-      await qr.manager.save(AuditLog, auditLog);
-      await qr.commitTransaction();
-    } catch {
-      await qr.rollbackTransaction();
-    } finally {
-      await qr.release();
-    }
+        ip_address: actor?.ipAddress ?? null,
+        user_agent: actor?.userAgent ?? null,
+      }),
+    );
 
     return this.findOneWithRelations(ds, saved.id);
   }
@@ -175,26 +167,20 @@ export class TasksService {
     }
 
     const snapshot = { title: task.title, productId: task.productId };
-    await repo.remove(task);
 
-    const qr = ds.createQueryRunner();
-    await qr.connect();
-    await qr.startTransaction();
-    try {
-      const auditLog = qr.manager.create(AuditLog, {
+    await this.withAuditLog<Task>(
+      ds,
+      (manager) => manager.remove(Task, task) as Promise<Task>,
+      () => ({
         actorMemberId: actor?.workspaceMemberId ?? null,
         entity: 'task',
         entityId: id,
         action: 'DELETE',
         changes: snapshot,
-      });
-      await qr.manager.save(AuditLog, auditLog);
-      await qr.commitTransaction();
-    } catch {
-      await qr.rollbackTransaction();
-    } finally {
-      await qr.release();
-    }
+        ip_address: actor?.ipAddress ?? null,
+        user_agent: actor?.userAgent ?? null,
+      }),
+    );
 
     return { deleted: true, id };
   }
@@ -418,6 +404,62 @@ export class TasksService {
       return row?.name ?? productId;
     } catch {
       return productId;
+    }
+  }
+
+  private async withAuditLog<T>(
+    ds: any,
+    operation: (manager: EntityManager) => Promise<T>,
+    buildAudit: (result: T) => {
+      actorMemberId: string | null;
+      entity: string;
+      entityId: string;
+      action: string;
+      changes: Record<string, any>;
+      ip_address?: string | null;
+      user_agent?: string | null;
+    },
+  ): Promise<T> {
+    const qr = ds.createQueryRunner();
+    await qr.connect();
+    await qr.startTransaction();
+    try {
+      const result = await operation(qr.manager);
+      await qr.manager.save(AuditLog, qr.manager.create(AuditLog, buildAudit(result)));
+      await qr.commitTransaction();
+      return result;
+    } catch (err) {
+      await qr.rollbackTransaction();
+      throw err;
+    } finally {
+      await qr.release();
+    }
+  }
+
+  private validateDateCoherence(
+    startDate?: Date | string | null,
+    endDate?: Date | string | null,
+    actualStartDate?: Date | string | null,
+    actualEndDate?: Date | string | null,
+  ): void {
+    const toMs = (v: Date | string | null | undefined): number | null =>
+      v ? new Date(v).getTime() : null;
+
+    const sd = toMs(startDate);
+    const ed = toMs(endDate);
+    const asd = toMs(actualStartDate);
+    const aed = toMs(actualEndDate);
+
+    if (sd !== null && ed !== null && sd > ed) {
+      throw new BadRequestException(
+        'La fecha de fin planificada no puede ser anterior a la fecha de inicio planificada.',
+      );
+    }
+
+    if (asd !== null && aed !== null && asd > aed) {
+      throw new BadRequestException(
+        'La fecha de fin real no puede ser anterior a la fecha de inicio real.',
+      );
     }
   }
 }

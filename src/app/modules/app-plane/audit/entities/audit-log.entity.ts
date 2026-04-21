@@ -35,7 +35,7 @@ export class AuditLog {
   @Column({ nullable: true })
   ip_address: string;
 
-  @Column({ nullable: true })
+  @Column({ nullable: true, type: 'text' })
   user_agent: string;
 
   @CreateDateColumn()
