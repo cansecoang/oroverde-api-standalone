@@ -1,8 +1,10 @@
-import { Controller, Post, UseGuards, Request, Get, Body, Query, Res } from '@nestjs/common';
-import { ApiTags, ApiOperation, ApiResponse, ApiCookieAuth, ApiBody, ApiQuery } from '@nestjs/swagger';
+import { Controller, Post, UseGuards, Request, Get, Body, Res } from '@nestjs/common';
+import { ApiTags, ApiOperation, ApiResponse, ApiCookieAuth, ApiBody } from '@nestjs/swagger';
 import { AuthGuard } from '@nestjs/passport';
+import { Throttle } from '@nestjs/throttler';
 import { AuthenticatedGuard } from '../../common/guards/authenticated.guard';
 import { AuthService } from './auth.service';
+import { ActivateAccountDto } from './dto/activate-account.dto';
 import { ChangePasswordDto } from './dto/change-password.dto';
 import { ForgotPasswordDto } from './dto/forgot-password.dto';
 import { VerifyResetCodeDto } from './dto/verify-reset-code.dto';
@@ -19,15 +21,17 @@ export class AuthController {
   // H-2: POST /auth/register ELIMINADO — ruta única: POST /admin/users
   // ─────────────────────────────────────────────────────────────────────────
 
-  @Get('activate')
-  @ApiOperation({ summary: 'Activar cuenta', description: 'Activa la cuenta usando el token enviado por email' })
-  @ApiQuery({ name: 'token', description: 'Token de activación', required: true })
-  @ApiResponse({ status: 200, description: 'Cuenta activada' })
+  // DT-003: POST en lugar de GET para evitar exposición del token en logs/URLs
+  @Post('activate')
+  @ApiOperation({ summary: 'Activar cuenta', description: 'Activa la cuenta usando el token enviado por email (token en el body, no en la URL)' })
+  @ApiResponse({ status: 201, description: 'Cuenta activada' })
   @ApiResponse({ status: 400, description: 'Token inválido o expirado' })
-  async activate(@Query('token') token: string) {
-    return this.authService.activateAccount(token);
+  async activate(@Body() dto: ActivateAccountDto) {
+    return this.authService.activateAccount(dto.token);
   }
-  
+
+  // DT-004: Throttle estricto en login — 5 intentos por 15 minutos por IP
+  @Throttle({ login: { limit: 5, ttl: 900000 } })
   @UseGuards(AuthGuard('local'))
   @Post('login')
   @ApiOperation({ summary: 'Iniciar sesión', description: 'Autentica con email/password y crea sesión con cookie' })

@@ -13,11 +13,11 @@ export class StrategicIndicator {
   @Column("text")
   description: string; // "Un mínimo de 6 soluciones..."
 
-  @Column()
+  @Column({ nullable: true })
   unit: string; // "Soluciones"
 
   @Column({ type: 'decimal', precision: 10, scale: 2, default: 0 })
-  total_target: number; 
+  total_target: number;
 
   // 👇 NUEVO: Fecha Límite / Planeada
   // Es opcional (nullable: true) para que puedan registrarla después

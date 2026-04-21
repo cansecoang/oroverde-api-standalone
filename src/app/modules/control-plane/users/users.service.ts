@@ -166,18 +166,18 @@ export class GlobalUsersService {
     }
 
     // Validar que la organización destino exista
-    if (changes.organization_id) {
-      const org = await this.orgRepo.findOne({ where: { id: changes.organization_id } });
+    if (changes.organizationId) {
+      const org = await this.orgRepo.findOne({ where: { id: changes.organizationId } });
       if (!org) {
         throw new BadRequestException('La organización especificada no existe.');
       }
     }
 
     const mergeData: Record<string, any> = {};
-  if (changes.email !== undefined) mergeData.email = changes.email.trim().toLowerCase();
-    if (changes.first_name !== undefined) mergeData.firstName = changes.first_name;
-    if (changes.last_name !== undefined) mergeData.lastName = changes.last_name;
-    if (changes.organization_id !== undefined) mergeData.organizationId = changes.organization_id;
+    if (changes.email !== undefined) mergeData.email = changes.email.trim().toLowerCase();
+    if (changes.firstName !== undefined) mergeData.firstName = changes.firstName;
+    if (changes.lastName !== undefined) mergeData.lastName = changes.lastName;
+    if (changes.organizationId !== undefined) mergeData.organizationId = changes.organizationId;
 
     this.repo.merge(user, mergeData);
     const saved = await this.repo.save(user);
@@ -187,6 +187,7 @@ export class GlobalUsersService {
       email: saved.email,
       firstName: saved.firstName,
       lastName: saved.lastName,
+      organizationId: saved.organizationId ?? null,
     });
     this.logger.log(`Evento 'user.updated' emitido para ${saved.id}`);
 
@@ -241,6 +242,9 @@ export class GlobalUsersService {
     }
 
     await this.repo.delete(id);
+
+    this.eventEmitter.emit('user.deleted', { id, email: user.email });
+    this.logger.log(`Evento 'user.deleted' emitido para ${id}`);
 
     await this.writeGlobalAudit(actorUserId ?? null, 'DELETE', id, {
       email: user.email,

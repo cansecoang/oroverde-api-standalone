@@ -1,11 +1,11 @@
 import { Controller, Get, Post, Patch, Delete, Body, Param, UseGuards, Request, Query, ParseUUIDPipe } from '@nestjs/common';
 import { ApiTags, ApiCookieAuth, ApiOperation, ApiResponse, ApiQuery, ApiParam } from '@nestjs/swagger';
+import { subject } from '@casl/ability';
 import { ProductsService } from './products.service';
 import { AuthenticatedGuard } from '../../../common/guards/authenticated.guard';
 import { TenantAccessGuard } from '../../../common/guards/tenant-access.guard';
-import { HybridPermissionsGuard } from '../../../common/guards/hybrid-permissions.guard';
-import { Permission } from '../../../common/enums/business-roles.enum';
-import { RequirePermission } from '../../../common/decorators/require-permission.decorator';
+import { PoliciesGuard } from '../../../common/guards/policies.guard';
+import { CheckPolicies } from '../../../common/decorators/check-policies.decorator';
 import { CreateProductDto } from './dto/create-product.dto';
 import { UpdateProductDto } from './dto/update-product.dto';
 import { MatrixQueryDto } from './dto/matrix-query.dto';
@@ -16,12 +16,12 @@ import { ValidationResultDto } from './dto/validation-result.dto';
 @ApiTags('Products')
 @ApiCookieAuth()
 @Controller('products')
-@UseGuards(AuthenticatedGuard, TenantAccessGuard, HybridPermissionsGuard)
+@UseGuards(AuthenticatedGuard, TenantAccessGuard, PoliciesGuard)
 export class ProductsController {
   constructor(private readonly productsService: ProductsService) {}
 
   @Post()
-  @RequirePermission(Permission.PRODUCT_WRITE)
+  @CheckPolicies((ability) => ability.can('create', 'Product'))
   @ApiOperation({ summary: 'Crear producto/proyecto' })
   @ApiResponse({ status: 201, description: 'Producto creado exitosamente' })
   @ApiResponse({ status: 400, description: 'Datos inválidos' })
@@ -32,7 +32,7 @@ export class ProductsController {
   }
 
   @Post('validate')
-  @RequirePermission(Permission.PRODUCT_WRITE)
+  @CheckPolicies((ability) => ability.can('create', 'Product'))
   @ApiOperation({ summary: 'Validar datos de producto sin crearlo (dry-run)' })
   @ApiResponse({ status: 200, description: 'Resultado de la validación', type: ValidationResultDto })
   @ApiResponse({ status: 401, description: 'No autenticado' })
@@ -47,26 +47,16 @@ export class ProductsController {
   }
 
   @Get()
-  @RequirePermission(Permission.PRODUCT_READ)
+  @CheckPolicies((ability) => ability.can('read', 'Product'))
   @ApiOperation({ summary: 'Listar productos' })
   @ApiQuery({ name: 'page', required: false, type: Number, description: 'Número de página' })
   @ApiQuery({ name: 'limit', required: false, type: Number, description: 'Elementos por página' })
   @ApiQuery({ name: 'search', required: false, type: String, description: 'Buscar por nombre o descripción' })
   @ApiQuery({ name: 'organizationId', required: false, type: String, description: 'Filtrar por organización líder' })
   @ApiQuery({ name: 'countryId', required: false, type: String, description: 'Filtrar por país' })
-  @ApiQuery({
-    name: 'groupBy',
-    required: false,
-    type: String,
-    description: 'Agrupar/ordenar listado por owner_organization, responsible_member o country',
-  })
+  @ApiQuery({ name: 'groupBy', required: false, type: String, description: 'Agrupar/ordenar listado' })
   @ApiQuery({ name: 'outputId', required: false, type: String, description: 'Filtrar por output estratégico (UUID)' })
-  @ApiQuery({
-    name: 'catalogFilters',
-    required: false,
-    type: String,
-    description: 'JSON con filtros de catálogo: {"fieldKey":["itemId1","itemId2"]}',
-  })
+  @ApiQuery({ name: 'catalogFilters', required: false, type: String, description: 'JSON con filtros de catálogo' })
   @ApiResponse({ status: 200, description: 'Lista de productos' })
   @ApiResponse({ status: 401, description: 'No autenticado' })
   findAll(
@@ -92,11 +82,11 @@ export class ProductsController {
   }
 
   // ── Matrix ────────────────────────────────────────────────────────────
-  // These routes MUST be declared before :id to avoid NestJS matching
-  // "matrix" as a UUID param.
+  // Estas rutas deben declararse ANTES de :id para que NestJS no trate
+  // "matrix" como un UUID param.
 
   @Get('matrix/group-by-options')
-  @RequirePermission(Permission.PRODUCT_READ)
+  @CheckPolicies((ability) => ability.can('read', 'Product'))
   @ApiOperation({ summary: 'Opciones disponibles para el dropdown Group By' })
   @ApiResponse({ status: 200, description: 'Lista de opciones', type: [GroupByOptionDto] })
   getGroupByOptions() {
@@ -104,7 +94,7 @@ export class ProductsController {
   }
 
   @Get('matrix/catalog-filters')
-  @RequirePermission(Permission.PRODUCT_READ)
+  @CheckPolicies((ability) => ability.can('read', 'Product'))
   @ApiOperation({ summary: 'Opciones de filtro por catálogo para la matrix' })
   @ApiResponse({ status: 200, description: 'Filtros de catálogo disponibles', type: [CatalogFilterOptionDto] })
   getCatalogFilters() {
@@ -112,7 +102,7 @@ export class ProductsController {
   }
 
   @Get('matrix/output-options')
-  @RequirePermission(Permission.PRODUCT_READ)
+  @CheckPolicies((ability) => ability.can('read', 'Product'))
   @ApiOperation({ summary: 'Outputs estratégicos disponibles para filtrar la matrix' })
   @ApiResponse({ status: 200, description: 'Lista de outputs', type: [MatrixOutputOptionDto] })
   getMatrixOutputOptions() {
@@ -120,7 +110,7 @@ export class ProductsController {
   }
 
   @Get('matrix')
-  @RequirePermission(Permission.PRODUCT_READ)
+  @CheckPolicies((ability) => ability.can('read', 'Product'))
   @ApiOperation({ summary: 'Product Matrix — vista bidimensional [Grupo × Indicadores]' })
   @ApiResponse({ status: 200, description: 'Datos de la matrix', type: MatrixResponseDto })
   @ApiResponse({ status: 400, description: 'groupBy inválido' })
@@ -128,42 +118,42 @@ export class ProductsController {
     return this.productsService.buildMatrix(dto);
   }
 
+  // getCapabilities usa req.ability que PoliciesGuard inyecta en el request.
+  // El servicio calcula las capabilities; el controller agrega abilityRules
+  // para que el frontend pueda reconstruir el AppAbility sin extra requests.
   @Get('capabilities')
-  @RequirePermission(Permission.PRODUCT_READ)
+  @CheckPolicies((ability) => ability.can('read', 'Product'))
   @ApiOperation({ summary: 'Capacidades del usuario actual sobre Productos' })
   @ApiResponse({
     status: 200,
-    description: 'Capabilities del módulo products para el usuario autenticado',
     schema: {
       type: 'object',
       properties: {
         canCreateProduct: { type: 'boolean' },
         canRequestProduct: { type: 'boolean' },
         pendingRequestsCount: { type: 'number' },
+        abilityRules: { type: 'array', description: 'Reglas CASL serializadas para el frontend' },
       },
     },
   })
-  getCapabilities(@Request() req) {
-    return this.productsService.getCapabilities(
-      req.workspaceMember.id,
-      req.workspaceMember.tenantRole,
-    );
+  async getCapabilities(@Request() req) {
+    const caps = await this.productsService.getCapabilities(req.ability);
+    return {
+      ...caps,
+      abilityRules: req.ability?.rules ?? [],
+    };
   }
 
-  // ── My Products (dashboard personal) ─────────────────────────────────
-
   @Get('my')
-  @RequirePermission(Permission.PRODUCT_READ)
+  @CheckPolicies((ability) => ability.can('read', 'Product'))
   @ApiOperation({ summary: 'Productos en los que participa el usuario autenticado' })
   @ApiResponse({ status: 200, description: 'Lista de productos con el rol del usuario' })
   getMyProducts(@Request() req) {
     return this.productsService.getMyProducts(req.workspaceMember.id);
   }
 
-  // ── Single Product CRUD ───────────────────────────────────────────────
-
   @Get(':id/metrics')
-  @RequirePermission(Permission.PRODUCT_READ)
+  @CheckPolicies((ability) => ability.can('read', 'Product'))
   @ApiOperation({ summary: 'Obtener metricas consolidadas del producto' })
   @ApiParam({ name: 'id', type: String, description: 'UUID del producto' })
   @ApiResponse({ status: 200, description: 'Metricas del producto', type: ProductMetricsDto })
@@ -173,7 +163,7 @@ export class ProductsController {
   }
 
   @Get(':id')
-  @RequirePermission(Permission.PRODUCT_READ)
+  @CheckPolicies((ability) => ability.can('read', 'Product'))
   @ApiOperation({ summary: 'Obtener producto por ID' })
   @ApiParam({ name: 'id', type: String, description: 'UUID del producto' })
   @ApiResponse({ status: 200, description: 'Producto encontrado' })
@@ -182,8 +172,12 @@ export class ProductsController {
     return this.productsService.findOne(id);
   }
 
+  // Fix B-2: subject('Product', { id }) vincula el permiso al objeto concreto.
+  // PRODUCT_COORDINATOR solo puede editar/eliminar SU producto — no cualquier producto.
   @Patch(':id')
-  @RequirePermission(Permission.PRODUCT_WRITE)
+  @CheckPolicies((ability, req) =>
+    ability.can('update', subject('Product', { id: req.params.id }))
+  )
   @ApiOperation({ summary: 'Actualizar producto' })
   @ApiParam({ name: 'id', type: String, description: 'UUID del producto' })
   @ApiResponse({ status: 200, description: 'Producto actualizado' })
@@ -198,7 +192,9 @@ export class ProductsController {
   }
 
   @Delete(':id')
-  @RequirePermission(Permission.PRODUCT_WRITE)
+  @CheckPolicies((ability, req) =>
+    ability.can('delete', subject('Product', { id: req.params.id }))
+  )
   @ApiOperation({ summary: 'Eliminar producto' })
   @ApiParam({ name: 'id', type: String, description: 'UUID del producto' })
   @ApiResponse({ status: 200, description: 'Producto eliminado' })

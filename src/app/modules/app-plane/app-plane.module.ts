@@ -1,5 +1,6 @@
 import { Module } from '@nestjs/common';
 import { TenancyModule } from '../tenancy/tenancy.module';
+import { CaslModule } from '../../common/casl/casl.module';
 // Controllers
 import { ProductsController } from './products/products.controller';
 import { FieldDefinitionsController } from './field-definitions/field-definitions.controller';
@@ -51,6 +52,7 @@ import { Notification } from './notifications/entities/notification.entity';
 @Module({
   imports: [
     TenancyModule,
+    CaslModule,
     TypeOrmModule.forFeature([
       ProductFieldDefinition,
       Product,

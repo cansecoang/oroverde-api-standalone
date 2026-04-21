@@ -1,9 +1,10 @@
 import { Injectable, BadRequestException, NotFoundException, ConflictException, Logger } from '@nestjs/common';
-import { InjectRepository } from '@nestjs/typeorm';
-import { Repository, ILike } from 'typeorm';
+import { InjectRepository, InjectDataSource } from '@nestjs/typeorm';
+import { Repository, ILike, DataSource } from 'typeorm';
 import { EventEmitter2 } from '@nestjs/event-emitter';
 import { GlobalOrganization } from './entities/global-organization.entity';
 import { GlobalUser } from '../users/entities/user.entity';
+import { GlobalAuditLog } from '../audit/entities/global-audit-log.entity';
 import { CreateGlobalOrganizationDto } from './dto/create-global-organization.dto';
 import { UpdateGlobalOrganizationDto } from './dto/update-global-organization.dto';
 
@@ -17,110 +18,108 @@ export class GlobalOrganizationsService {
     @InjectRepository(GlobalUser)
     private readonly userRepo: Repository<GlobalUser>,
     private readonly eventEmitter: EventEmitter2,
+    @InjectDataSource('default') private readonly ds: DataSource,
   ) {}
 
-  // 1. CREAR (Estricto a tu entidad)
-  async create(data: CreateGlobalOrganizationDto) {
-    // Validar duplicados (Tax ID o Nombre)
-    const existing = await this.repo.findOne({ 
-        where: [
-          { tax_id: data.tax_id }, 
-          { name: data.name }
-        ] 
+  // ─── AUDIT HELPER ─────────────────────────────────────────
+  private async writeGlobalAudit(
+    actorUserId: string | null,
+    action: 'CREATE' | 'UPDATE' | 'DELETE',
+    entityId: string,
+    changes: Record<string, any> | null,
+  ): Promise<void> {
+    try {
+      const log = this.ds.getRepository(GlobalAuditLog).create({
+        actorUserId: actorUserId ?? null,
+        action,
+        entity: 'ORGANIZATION',
+        entityId,
+        changes,
+      });
+      await this.ds.getRepository(GlobalAuditLog).save(log);
+    } catch (err) {
+      this.logger.warn(`writeGlobalAudit failed (non-fatal): ${err?.message}`);
+    }
+  }
+
+  // 1. CREAR
+  // G-05 (organization_audit.md): La creación de una organización global NO se propaga
+  // automáticamente a los silos de tenants. Cada tenant gestiona su propio subconjunto
+  // de organizaciones disponibles mediante un link manual (workspace_organizations).
+  // NO emitir evento organization.created aquí — es diseño intencional, no un gap.
+  async create(data: CreateGlobalOrganizationDto, actorUserId?: string) {
+    const existing = await this.repo.findOne({
+      where: { name: data.name },
     });
-    
+
     if (existing) {
-        throw new BadRequestException('Ya existe una organización con ese Nombre o Tax ID.');
+      throw new BadRequestException('Ya existe una organización con ese nombre.');
     }
 
     const org = this.repo.create({
       name: data.name,
-      tax_id: data.tax_id,
-      description: data.description,
-      countryId: data.countryId // Si viene null, TypeORM lo maneja porque es nullable
+      countryId: data.countryId,
     });
 
-    return this.repo.save(org);
+    const saved = await this.repo.save(org);
+
+    await this.writeGlobalAudit(actorUserId ?? null, 'CREATE', saved.id, {
+      new: { name: saved.name, countryId: saved.countryId },
+    });
+
+    return saved;
   }
 
-  // 2. LISTAR (Incluyendo la relación Country)
+  // 2. LISTAR
   async findAll(query = '') {
     const q = query ?? '';
     return this.repo.find({
-      where: q ? [
-        { name: ILike(`%${q}%`) },
-        { tax_id: ILike(`%${q}%`) }
-      ] : undefined,
-      relations: ['country'], // 👈 Trae el objeto GlobalCountry asociado
+      where: q ? { name: ILike(`%${q}%`) } : undefined,
+      relations: ['country'],
       take: 20,
-      order: { name: 'ASC' }
+      order: { name: 'ASC' },
     });
   }
 
-  // 2b. LISTAR SIMPLE (solo id y name para dropdowns)
+  // 2b. LISTAR SIMPLE
   async findAllSimple(query: string = '') {
     const orgs = await this.repo.find({
-      where: query ? [
-        { name: ILike(`%${query}%`) },
-        { tax_id: ILike(`%${query}%`) }
-      ] : undefined,
+      where: query ? { name: ILike(`%${query}%`) } : undefined,
       select: ['id', 'name'],
       take: 100,
-      order: { name: 'ASC' }
+      order: { name: 'ASC' },
     });
-    return orgs.map(org => ({ id: org.id, name: org.name }));
+    return orgs.map((org) => ({ id: org.id, name: org.name }));
   }
 
   // 3. BUSCAR UNO
   async findOne(id: string) {
-    const org = await this.repo.findOne({ 
-        where: { id },
-        relations: ['country'] 
+    const org = await this.repo.findOne({
+      where: { id },
+      relations: ['country'],
     });
     if (!org) throw new NotFoundException('Organización no encontrada');
     return org;
   }
 
   // 4. ACTUALIZAR
-  /**
-   * Actualiza una organización con validación de colisiones en name y tax_id.
-   * Si se envía name o tax_id, verifica que no colisionen con otra organización.
-   */
-  async update(id: string, changes: UpdateGlobalOrganizationDto) {
+  async update(id: string, changes: UpdateGlobalOrganizationDto, actorUserId?: string) {
     const org = await this.findOne(id);
 
-    // ─── VALIDACIÓN DE COLISIONES ───
-    // Si se intenta actualizar el nombre, verificar que no colisione
     if (changes.name && changes.name !== org.name) {
       const existingByName = await this.repo.findOne({
         where: { name: changes.name },
       });
       if (existingByName && existingByName.id !== id) {
-        throw new BadRequestException(
-          'Ya existe otra organización con ese nombre.',
-        );
+        throw new BadRequestException('Ya existe otra organización con ese nombre.');
       }
     }
 
-    // Si se intenta actualizar el tax_id, verificar que no colisione
-    if (changes.tax_id && changes.tax_id !== org.tax_id) {
-      const existingByTaxId = await this.repo.findOne({
-        where: { tax_id: changes.tax_id },
-      });
-      if (existingByTaxId && existingByTaxId.id !== id) {
-        throw new BadRequestException(
-          'Ya existe otra organización con ese Tax ID.',
-        );
-      }
-    }
+    const oldSnapshot = { name: org.name, countryId: org.countryId };
 
-    // ─── MERGE Y GUARDAR ───
-    // Mapear country_id del DTO → countryId de la entidad si viene
     const mergeData: Partial<GlobalOrganization> = {
       name: changes.name,
-      tax_id: changes.tax_id,
-      description: changes.description,
-      countryId: changes.country_id, // Mapear country_id → countryId
+      countryId: changes.countryId,
     };
 
     this.repo.merge(org, mergeData);
@@ -129,36 +128,41 @@ export class GlobalOrganizationsService {
     this.eventEmitter.emit('organization.updated', {
       id: saved.id,
       name: saved.name,
-      tax_id: saved.tax_id,
+      countryId: saved.countryId ?? null,
     });
     this.logger.log(`Evento 'organization.updated' emitido para ${saved.id}`);
+
+    await this.writeGlobalAudit(actorUserId ?? null, 'UPDATE', saved.id, {
+      old: oldSnapshot,
+      new: { name: saved.name, countryId: saved.countryId },
+    });
 
     return saved;
   }
 
   // 5. BORRAR
-  /**
-   * Elimina una organización solo si no tiene usuarios asociados.
-   * De lo contrario, lanza ConflictException con el conteo de usuarios.
-   */
-  async remove(id: string) {
-    // Verificar que la organización exista
+  async remove(id: string, actorUserId?: string) {
     const org = await this.findOne(id);
 
-    // ─── CONTEO DE USUARIOS ───
     const userCount = await this.userRepo.count({
       where: { organizationId: id },
     });
 
-    // ─── PREVENCIÓN DE ELIMINACIÓN ───
     if (userCount > 0) {
       throw new ConflictException(
         `No se puede eliminar la organización porque tiene ${userCount} usuarios asociados. Reasigne o elimine los usuarios primero.`,
       );
     }
 
-    // ─── BORRADO SEGURO ───
     await this.repo.delete(id);
+
+    this.eventEmitter.emit('organization.deleted', { id, name: org.name });
+    this.logger.log(`Evento 'organization.deleted' emitido para ${id}`);
+
+    await this.writeGlobalAudit(actorUserId ?? null, 'DELETE', id, {
+      old: { name: org.name, countryId: org.countryId },
+    });
+
     return {
       message: `Organización '${org.name}' eliminada exitosamente.`,
       deletedId: id,

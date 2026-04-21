@@ -1,4 +1,4 @@
-import { Injectable, Scope, Inject, NotFoundException, BadRequestException, Logger } from '@nestjs/common';
+import { Injectable, Scope, Inject, NotFoundException, BadRequestException, ConflictException, Logger } from '@nestjs/common';
 import { InjectDataSource } from '@nestjs/typeorm';
 import { REQUEST } from '@nestjs/core';
 import { DataSource } from 'typeorm';
@@ -11,12 +11,13 @@ import { Tenant } from '../../control-plane/tenants/entities/tenant.entity';
 
 // Entidades Locales
 import { WorkspaceMember } from './entities/workspace-member.entity';
-import { WorkspaceOrganization } from '../organizations/entities/workspace-organization.entity';
+import { WorkspaceOrganization, WorkspaceOrgType } from '../organizations/entities/workspace-organization.entity';
 import { AuditLog } from '../audit/entities/audit-log.entity';
 
 // DTO
 import { InviteMemberDto } from './dto/invite-member.dto';
 import { UpdateMemberDto } from './dto/update-member.dto';
+import { TenantRole } from '../../../common/enums/business-roles.enum';
 import { NotificationsService } from '../notifications/notifications.service';
 
 @Injectable({ scope: Scope.REQUEST })
@@ -73,10 +74,9 @@ export class WorkspaceMembersService {
         this.logger.log(`Importando organización global "${globalUser.organization.name}" al tenant...`);
         localOrg = orgRepo.create({
           name: globalUser.organization.name,
-          tax_id: globalUser.organization.tax_id,
           globalReferenceId: globalUser.organization.id,
           is_tenant_owner: false,
-          type: 'PARTNER' // Asumimos que es un socio
+          type: WorkspaceOrgType.PARTNER,
         });
         await orgRepo.save(localOrg);
       }
@@ -95,11 +95,11 @@ export class WorkspaceMembersService {
     // 5. Crear el Miembro Local
     const newMember = memberRepo.create({
       userId: globalUser.id,
-      email: globalUser.email,         // Copia local
-      full_name: globalUser.fullName,  // Copia local (asegúrate de tener el getter fullName en GlobalUser)
+      email: globalUser.email,
+      first_name: globalUser.firstName,
+      last_name: globalUser.lastName,
       organizationId: targetOrgId,     // 👈 Vinculación automática
       tenantRole: dto.role,
-      alias: dto.alias
     });
 
     const saved = await memberRepo.save(newMember);
@@ -170,10 +170,8 @@ export class WorkspaceMembersService {
     }
 
     const oldRole = member.tenantRole;
-    const oldAlias = member.alias;
 
     if (dto.role !== undefined) member.tenantRole = dto.role;
-    if (dto.alias !== undefined) member.alias = dto.alias;
 
     const saved = await repo.save(member);
 
@@ -185,14 +183,61 @@ export class WorkspaceMembersService {
           entityId: saved.id,
           action: 'UPDATE',
           changes: {
-            role:  { from: oldRole,  to: saved.tenantRole },
-            alias: { from: oldAlias, to: saved.alias },
+            role: { from: oldRole, to: saved.tenantRole },
           },
         }),
       );
     } catch { /* best-effort */ }
 
     return saved;
+  }
+
+  // ❌ RETIRAR MIEMBRO
+  async removeMember(id: string, actorUserId?: string, actorMemberId?: string) {
+    const tenantDS = await this.tenantConnection.getTenantConnection();
+    const repo = tenantDS.getRepository(WorkspaceMember);
+
+    const member = await repo.findOne({ where: { id } });
+    if (!member) {
+      throw new NotFoundException(`No se encontró el miembro '${id}' en este workspace.`);
+    }
+
+    // Guard: no auto-retiro
+    if (member.userId === actorUserId) {
+      throw new BadRequestException('No puedes retirarte a ti mismo del workspace.');
+    }
+
+    // Guard: último GENERAL_COORDINATOR
+    if (member.tenantRole === TenantRole.GENERAL_COORDINATOR) {
+      const count = await repo.count({ where: { tenantRole: TenantRole.GENERAL_COORDINATOR } });
+      if (count <= 1) {
+        throw new BadRequestException('No se puede eliminar al único Coordinador General del workspace.');
+      }
+    }
+
+    await repo.delete(id);
+
+    // Limpiar TenantMember en control-plane (reverso exacto de inviteMember)
+    const tenantSlug = this.request.tenantId;
+    const tenant = await this.globalDS.getRepository(Tenant).findOne({ where: { slug: tenantSlug } });
+    if (tenant) {
+      await this.globalDS.getRepository(TenantMember).delete({ userId: member.userId, tenantId: tenant.id });
+    }
+
+    // Audit log (best-effort)
+    try {
+      await tenantDS.getRepository(AuditLog).save(
+        tenantDS.getRepository(AuditLog).create({
+          actorMemberId: actorMemberId ?? null,
+          entity: 'workspace_member',
+          entityId: id,
+          action: 'DELETE',
+          changes: { email: member.email, tenantRole: member.tenantRole },
+        }),
+      );
+    } catch { /* best-effort */ }
+
+    return { message: `Miembro '${member.email}' retirado del workspace.`, removedId: id };
   }
 
   // 🔍 PERFIL PROPIO
@@ -223,7 +268,7 @@ export class WorkspaceMembersService {
     const dataSource = await this.tenantConnection.getTenantConnection();
     const [data, total] = await dataSource.getRepository(WorkspaceMember).findAndCount({
       relations: ['organization'],
-      order: { full_name: 'ASC' },
+      order: { last_name: 'ASC' },
       skip: (page - 1) * limit,
       take: limit,
     });

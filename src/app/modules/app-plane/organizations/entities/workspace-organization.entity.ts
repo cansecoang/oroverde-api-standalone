@@ -1,6 +1,11 @@
 import { Entity, PrimaryGeneratedColumn, Column, CreateDateColumn, UpdateDateColumn, Index } from 'typeorm';
 
-@Entity('workspace_organizations') 
+export enum WorkspaceOrgType {
+  MAIN = 'MAIN',
+  PARTNER = 'PARTNER',
+}
+
+@Entity('workspace_organizations')
 export class WorkspaceOrganization {
   @PrimaryGeneratedColumn('uuid')
   id: string;
@@ -17,16 +22,10 @@ export class WorkspaceOrganization {
   is_tenant_owner: boolean;
 
   @Column()
-  name: string; 
+  name: string;
 
-  @Column({ unique: true }) // Es bueno tener el tax_id también aquí para validaciones locales
-  tax_id: string;
-
-  @Column({ nullable: true })
-  type: string; 
-
-  @Column({ nullable: true })
-  contact_email: string;
+  @Column({ type: 'varchar', nullable: true })
+  type: WorkspaceOrgType | null;
 
   /**
    * Código ISO 3166-1 alpha-2 del país de origen de la organización.

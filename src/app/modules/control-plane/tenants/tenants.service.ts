@@ -9,7 +9,7 @@ import { GlobalAuditLog } from '../audit/entities/global-audit-log.entity';
 
 // Entidades directas aún necesarias en este servicio
 import { WorkspaceMember }       from '../../app-plane/members/entities/workspace-member.entity';
-import { WorkspaceOrganization } from '../../app-plane/organizations/entities/workspace-organization.entity';
+import { WorkspaceOrganization, WorkspaceOrgType } from '../../app-plane/organizations/entities/workspace-organization.entity';
 import { TenantRole }            from '../../../common/enums/business-roles.enum';
 
 // Lista de entidades del app-plane (local en apps/api, sin circular dep con libs)
@@ -154,9 +154,7 @@ export class TenantsService {
             globalReferenceId: globalOrg.id,
             is_tenant_owner: true,
             name: globalOrg.name,
-            tax_id: globalOrg.tax_id,
-            type: 'owner',
-            contact_email: superAdmin.email,
+            type: WorkspaceOrgType.MAIN,
             countryId: globalOrg.country?.code ?? null,
         });
         const savedWorkspaceOrg = await orgRepo.save(workspaceOrg);
@@ -168,10 +166,10 @@ export class TenantsService {
         const meAsBoss = membersRepo.create({
             userId: superAdminId,
             email: superAdmin.email,
-            full_name: `${superAdmin.firstName} ${superAdmin.lastName}`,
+            first_name: superAdmin.firstName,
+            last_name: superAdmin.lastName,
             organizationId: savedWorkspaceOrg.id,
             tenantRole: TenantRole.GENERAL_COORDINATOR,
-            alias: 'Super Admin (Configurador)'
         });
 
         await membersRepo.save(meAsBoss);
@@ -286,9 +284,7 @@ export class TenantsService {
           globalReferenceId: globalOrg.id,
           is_tenant_owner: false,
           name: globalOrg.name,
-          tax_id: globalOrg.tax_id,
-          type: 'partner',
-          contact_email: user.email,
+          type: WorkspaceOrgType.PARTNER,
           countryId: globalOrg.country?.code ?? null,
         }));
         this.logger.log(`🏢 Organización '${globalOrg.name}' vinculada a ${tenant.dbName}`);
@@ -305,7 +301,8 @@ export class TenantsService {
       await membersRepo.save(membersRepo.create({
         userId,
         email: user.email,
-        full_name: `${user.firstName} ${user.lastName}`,
+        first_name: user.firstName,
+        last_name: user.lastName,
         organizationId: workspaceOrg.id,
         tenantRole,
       }));

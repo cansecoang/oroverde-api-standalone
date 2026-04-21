@@ -31,10 +31,10 @@ const BASE_STRATEGIES: Record<string, GroupByStrategy> = {
     label: 'Organization',
   },
   responsible_member: {
-    selectGroup: 'wm.id as group_id, wm.full_name as group_name',
+    selectGroup: "wm.id as group_id, TRIM(COALESCE(wm.first_name, '') || ' ' || COALESCE(wm.last_name, '')) as group_name",
     joinClause:
       'JOIN product_members pm_resp ON pm_resp.product_id = p.id AND pm_resp.is_responsible = true\n      JOIN workspace_members wm ON pm_resp.member_id = wm.id',
-    orderBy: 'wm.full_name',
+    orderBy: 'wm.last_name',
     label: 'Responsible',
   },
   country: {

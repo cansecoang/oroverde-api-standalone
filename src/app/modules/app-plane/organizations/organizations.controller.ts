@@ -1,4 +1,4 @@
-import { Controller, Post, Patch, Body, Get, Param, Query, UseGuards, ParseUUIDPipe, Request } from '@nestjs/common';
+import { Controller, Post, Patch, Delete, Body, Get, Param, Query, UseGuards, ParseUUIDPipe, Request } from '@nestjs/common';
 import { ApiTags, ApiCookieAuth, ApiOperation, ApiResponse, ApiQuery } from '@nestjs/swagger';
 import { OrganizationsService } from './organizations.service';
 import { AuthenticatedGuard } from '../../../common/guards/authenticated.guard';
@@ -7,7 +7,6 @@ import { HybridPermissionsGuard } from '../../../common/guards/hybrid-permission
 import { RequirePermission } from '../../../common/decorators/require-permission.decorator';
 import { Permission } from '../../../common/enums/business-roles.enum';
 // DTOs
-import { CreateWorkspaceOrganizationDto } from './dto/create-workspace-organization.dto';
 import { LinkGlobalOrganizationDto } from './dto/link-global-organization.dto';
 import { UpdateWorkspaceOrganizationDto } from './dto/update-workspace-organization.dto';
 
@@ -40,21 +39,10 @@ export class OrganizationsController {
     return this.service.linkFromGlobal(dto.globalId);
   }
 
-  // --- 📝 CREACIÓN MANUAL (Alternativa) ---
-  @Post()
-  @RequirePermission(Permission.ORGANIZATION_MANAGE)
-  @ApiOperation({ summary: 'Crear organización manual' })
-  @ApiResponse({ status: 201, description: 'Organización creada exitosamente' })
-  @ApiResponse({ status: 400, description: 'Datos inválidos' })
-  @ApiResponse({ status: 401, description: 'No autenticado' })
-  create(@Body() dto: CreateWorkspaceOrganizationDto) {
-    return this.service.createManual(dto);
-  }
-
   // --- ✏️ ACTUALIZAR ORGANIZACIÓN ---
   @Patch(':id')
   @RequirePermission(Permission.ORGANIZATION_MANAGE)
-  @ApiOperation({ summary: 'Actualizar organización del workspace' })
+  @ApiOperation({ summary: 'Actualizar tipo de organización del workspace' })
   @ApiResponse({ status: 200, description: 'Organización actualizada' })
   @ApiResponse({ status: 404, description: 'Organización no encontrada' })
   update(
@@ -63,6 +51,18 @@ export class OrganizationsController {
     @Request() req,
   ) {
     return this.service.update(id, dto, req.workspaceMember?.id);
+  }
+
+  // --- 🗑 DESVINCULAR ORGANIZACIÓN ---
+  @Delete(':id')
+  @RequirePermission(Permission.ORGANIZATION_MANAGE)
+  @ApiOperation({ summary: 'Desvincular organización del workspace' })
+  @ApiResponse({ status: 200, description: 'Organización desvinculada exitosamente' })
+  @ApiResponse({ status: 400, description: 'No se puede desvincular la organización propietaria' })
+  @ApiResponse({ status: 404, description: 'Organización no encontrada' })
+  @ApiResponse({ status: 409, description: 'Conflicto: la organización tiene productos o miembros asociados' })
+  unlink(@Param('id', ParseUUIDPipe) id: string, @Request() req) {
+    return this.service.unlink(id, req.workspaceMember?.id);
   }
 
   // --- 📂 LISTADO LOCAL (Para Dropdowns en Proyectos) ---

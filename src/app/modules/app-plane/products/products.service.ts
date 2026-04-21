@@ -12,6 +12,7 @@ import { UpdateProductDto } from './dto/update-product.dto';
 import { CustomFieldValueDto } from './dto/custom-field-value.dto';
 import { CustomOrgFieldDto } from './dto/custom-link-field.dto';
 import { ProductRole, TenantRole } from '../../../common/enums/business-roles.enum';
+import { AppAbility } from '../../../common/casl/casl-types';
 import { WorkspaceOrganization } from '../organizations/entities/workspace-organization.entity';
 import { CatalogItem } from '../catalogs/entities/catalog-item.entity';
 import { MatrixQueryDto } from './dto/matrix-query.dto';
@@ -338,40 +339,40 @@ export class ProductsService {
     }
 
     if (effectiveGroupBy === 'owner_organization') {
-      qb.leftJoin('product.ownerOrganization', 'groupOwnerOrg');
-      qb.addOrderBy('groupOwnerOrg.name', 'ASC', 'NULLS LAST');
+      qb.addOrderBy(
+        '(SELECT wo.name FROM workspace_organizations wo WHERE wo.id = product.owner_organization_id)',
+        'ASC',
+        'NULLS LAST',
+      );
     } else if (effectiveGroupBy === 'country') {
-      qb.leftJoin('product.country', 'groupCountry');
-      qb.addOrderBy('groupCountry.name', 'ASC', 'NULLS LAST');
+      qb.addOrderBy(
+        '(SELECT c.name FROM countries c WHERE c.id = product.country_id)',
+        'ASC',
+        'NULLS LAST',
+      );
     } else if (effectiveGroupBy === 'responsible_member') {
-      qb.leftJoin('product.members', 'groupResponsibleMember', 'groupResponsibleMember.isResponsible = true')
-        .leftJoin('groupResponsibleMember.member', 'groupResponsibleWorkspaceMember');
-      qb.addOrderBy('groupResponsibleWorkspaceMember.full_name', 'ASC', 'NULLS LAST');
+      qb.addOrderBy(
+        `(SELECT MIN(wm.last_name || ' ' || wm.first_name)
+          FROM product_members pm
+          JOIN workspace_members wm ON wm.id = pm.member_id
+          WHERE pm.product_id = product.id
+            AND pm.is_responsible = true)`,
+        'ASC',
+        'NULLS LAST',
+      );
     }
 
     qb.addOrderBy('product.name', 'ASC');
 
-    const total = await qb.clone().distinct(true).getCount();
+    const total = await qb.clone().orderBy().getCount();
     const totalPages = Math.max(1, Math.ceil(total / cappedLimit));
     const effectivePage = Math.min(safePage, totalPages);
 
-    const idQuery = qb
+    const idRows: Array<{ id: string }> = await qb
       .clone()
       .select('product.id', 'id')
-      .addSelect('product.name', 'order_name');
-
-    if (effectiveGroupBy === 'owner_organization') {
-      idQuery.addSelect('groupOwnerOrg.name', 'order_group');
-    } else if (effectiveGroupBy === 'country') {
-      idQuery.addSelect('groupCountry.name', 'order_group');
-    } else if (effectiveGroupBy === 'responsible_member') {
-      idQuery.addSelect('groupResponsibleWorkspaceMember.full_name', 'order_group');
-    }
-
-    const idRows: Array<{ id: string }> = await idQuery
-      .distinct(true)
-      .skip((effectivePage - 1) * cappedLimit)
-      .take(cappedLimit)
+      .limit(cappedLimit)
+      .offset((effectivePage - 1) * cappedLimit)
       .getRawMany();
 
     const pagedIds = idRows.map((row) => row.id);
@@ -425,59 +426,24 @@ export class ProductsService {
     };
   }
 
-  async getCapabilities(
-    workspaceMemberId: string,
-    tenantRole?: string,
-  ): Promise<{
+  async getCapabilities(ability: AppAbility): Promise<{
     canCreateProduct: boolean;
     canRequestProduct: boolean;
     pendingRequestsCount: number;
   }> {
-    const SUPER_ADMIN_SENTINEL = '00000000-0000-0000-0000-000000000000';
+    const canCreateProduct = ability.can('create', 'Product');
+    // Fix B-1: todos los MEMBER pueden solicitar si no pueden crear directamente.
+    // AbilityFactory ya otorga create('ProductRequest') a todos los MEMBER.
+    const canRequestProduct = !canCreateProduct && ability.can('create', 'ProductRequest');
 
-    if (
-      workspaceMemberId === SUPER_ADMIN_SENTINEL ||
-      tenantRole === TenantRole.GENERAL_COORDINATOR
-    ) {
-      // GC and super-admin: get pending count for the review badge
+    // Solo consultamos pendingRequestsCount para quienes pueden revisar o crear
+    let pendingRequestsCount = 0;
+    if (canCreateProduct || ability.can('review', 'ProductRequest')) {
       const dataSource = await this.tenantConnection.getTenantConnection();
-      const pendingRequestsCount = await this.getPendingRequestsCount(dataSource);
-      return { canCreateProduct: true, canRequestProduct: false, pendingRequestsCount };
+      pendingRequestsCount = await this.getPendingRequestsCount(dataSource);
     }
 
-    const dataSource = await this.tenantConnection.getTenantConnection();
-    const memberRepo = dataSource.getRepository(ProductMember);
-
-    const coordinatorMembership = await memberRepo.findOne({
-      where: {
-        memberId: workspaceMemberId,
-        productRole: ProductRole.PRODUCT_COORDINATOR,
-      },
-    });
-
-    const canCreateProduct = !!coordinatorMembership;
-
-    if (canCreateProduct) {
-      // PRODUCT_COORDINATOR: can create directly + review requests
-      const pendingRequestsCount = await this.getPendingRequestsCount(dataSource);
-      return { canCreateProduct: true, canRequestProduct: false, pendingRequestsCount };
-    }
-
-    // Check if user is a DEVELOPER_WORKER in any product
-    const workerMembership = await memberRepo.findOne({
-      where: {
-        memberId: workspaceMemberId,
-        productRole: ProductRole.DEVELOPER_WORKER,
-      },
-    });
-
-    const canRequestProduct = !!workerMembership;
-
-    return {
-      canCreateProduct: false,
-      canRequestProduct,
-      pendingRequestsCount: 0,
-    };
+    return { canCreateProduct, canRequestProduct, pendingRequestsCount };
   }
 
   private async getPendingRequestsCount(dataSource: import('typeorm').DataSource): Promise<number> {
@@ -1332,12 +1298,10 @@ export class ProductsService {
       field_key: string;
       organization_id: string;
       org_name: string;
-      org_tax_id: string;
     }> = await dataSource.query(
       `SELECT pfd.key AS field_key,
               pcol.organization_id,
-              wo.name AS org_name,
-              wo.tax_id AS org_tax_id
+              wo.name AS org_name
        FROM product_custom_org_links pcol
        JOIN product_field_definitions pfd ON pcol.field_definition_id = pfd.id
        JOIN workspace_organizations wo ON pcol.organization_id = wo.id
@@ -1351,7 +1315,6 @@ export class ProductsService {
       result[row.field_key].push({
         id: row.organization_id,
         name: row.org_name,
-        taxId: row.org_tax_id,
       });
     }
 

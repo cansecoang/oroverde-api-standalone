@@ -1,4 +1,4 @@
-import { IsUUID, IsNotEmpty, IsOptional, IsString } from 'class-validator';
+import { IsUUID, IsNotEmpty, IsOptional, IsString, IsDateString } from 'class-validator';
 import { ApiPropertyOptional } from '@nestjs/swagger';
 
 export class UpdateTaskDto {
@@ -38,18 +38,22 @@ export class UpdateTaskDto {
   assignedOrganizationId?: string;
 
   @ApiPropertyOptional({ description: 'Fecha de inicio planificada', example: '2025-08-01' })
+  @IsDateString()
   @IsOptional()
   startDate?: string;
 
   @ApiPropertyOptional({ description: 'Fecha de fin planificada', example: '2025-12-31' })
+  @IsDateString()
   @IsOptional()
   endDate?: string;
 
   @ApiPropertyOptional({ description: 'Fecha de inicio real' })
+  @IsDateString()
   @IsOptional()
   actualStartDate?: string;
 
   @ApiPropertyOptional({ description: 'Fecha de fin real' })
+  @IsDateString()
   @IsOptional()
   actualEndDate?: string;
 }

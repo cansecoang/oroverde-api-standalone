@@ -1,4 +1,4 @@
-import { IsString, IsOptional, IsUUID } from 'class-validator';
+import { IsString, IsOptional, Length } from 'class-validator';
 import { ApiPropertyOptional } from '@nestjs/swagger';
 
 /**
@@ -15,26 +15,11 @@ export class UpdateGlobalOrganizationDto {
   name?: string;
 
   @ApiPropertyOptional({
-    description: 'Identificación fiscal (RFC/NIT)',
-    example: 'NIT-654321',
+    description: 'Código ISO 3166-1 alpha-2 del país',
+    example: 'MX',
   })
   @IsString()
+  @Length(2, 2, { message: 'El código de país debe ser de 2 caracteres' })
   @IsOptional()
-  tax_id?: string;
-
-  @ApiPropertyOptional({
-    description: 'Descripción de la organización',
-    example: 'Organización enfocada en proyectos sostenibles',
-  })
-  @IsString()
-  @IsOptional()
-  description?: string;
-
-  @ApiPropertyOptional({
-    description: 'UUID del país',
-    example: '550e8400-e29b-41d4-a716-446655440000',
-  })
-  @IsUUID('4', { message: 'El ID del país debe ser un UUID válido' })
-  @IsOptional()
-  country_id?: string;
+  countryId?: string;
 }

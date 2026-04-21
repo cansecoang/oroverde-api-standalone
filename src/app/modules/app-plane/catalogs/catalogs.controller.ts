@@ -2,23 +2,21 @@ import { Controller, Post, Get, Body, UseGuards, Param } from '@nestjs/common';
 import { ApiTags, ApiCookieAuth, ApiOperation, ApiResponse, ApiParam } from '@nestjs/swagger';
 import { CatalogsService } from './catalogs.service';
 import { CreateCatalogDto } from './dto/create-catalog.dto';
-
 import { AuthenticatedGuard } from '../../../common/guards/authenticated.guard';
 import { TenantAccessGuard } from '../../../common/guards/tenant-access.guard';
-import { RequirePermission } from '../../../common/decorators/require-permission.decorator';
-import { Permission } from '../../../common/enums/business-roles.enum';
+import { PoliciesGuard } from '../../../common/guards/policies.guard';
+import { CheckPolicies } from '../../../common/decorators/check-policies.decorator';
 import { CatalogType } from '../../../common/enums/catalog-type.enum';
-import { HybridPermissionsGuard } from '../../../common/guards/hybrid-permissions.guard';
 
 @ApiTags('Catalogs')
 @ApiCookieAuth()
 @Controller('catalogs')
-@UseGuards(AuthenticatedGuard, TenantAccessGuard, HybridPermissionsGuard)
+@UseGuards(AuthenticatedGuard, TenantAccessGuard, PoliciesGuard)
 export class CatalogsController {
   constructor(private readonly catalogsService: CatalogsService) {}
 
   @Post()
-  @RequirePermission(Permission.CATALOG_WRITE)
+  @CheckPolicies((ability) => ability.can('write', 'Catalog'))
   @ApiOperation({ summary: 'Crear catálogo' })
   @ApiResponse({ status: 201, description: 'Catálogo creado exitosamente' })
   @ApiResponse({ status: 400, description: 'Datos inválidos' })
@@ -28,7 +26,7 @@ export class CatalogsController {
   }
 
   @Get()
-  @RequirePermission(Permission.CATALOG_READ)
+  @CheckPolicies((ability) => ability.can('read', 'Catalog'))
   @ApiOperation({ summary: 'Listar catálogos' })
   @ApiResponse({ status: 200, description: 'Lista de catálogos' })
   @ApiResponse({ status: 401, description: 'No autenticado' })
@@ -37,7 +35,7 @@ export class CatalogsController {
   }
 
   @Get('options/:type')
-  @RequirePermission(Permission.CATALOG_READ)
+  @CheckPolicies((ability) => ability.can('read', 'Catalog'))
   @ApiOperation({ summary: 'Obtener items por tipo' })
   @ApiParam({ name: 'type', type: String, description: 'Tipo de catálogo' })
   @ApiResponse({ status: 200, description: 'Items del tipo solicitado' })
@@ -47,7 +45,7 @@ export class CatalogsController {
   }
 
   @Get(':code')
-  @RequirePermission(Permission.CATALOG_READ)
+  @CheckPolicies((ability) => ability.can('read', 'Catalog'))
   @ApiOperation({ summary: 'Obtener catálogo por código' })
   @ApiParam({ name: 'code', type: String, description: 'Código del catálogo' })
   @ApiResponse({ status: 200, description: 'Catálogo encontrado' })

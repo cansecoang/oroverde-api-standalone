@@ -14,10 +14,10 @@ export class ProductCreationRequest {
   @Index()
   @Column({
     type: 'enum',
-    enum: ['PENDING', 'APPROVED', 'DECLINED'],
+    enum: ['PENDING', 'APPROVED', 'DECLINED', 'REJECTED'],
     default: 'PENDING',
   })
-  status: 'PENDING' | 'APPROVED' | 'DECLINED';
+  status: 'PENDING' | 'APPROVED' | 'DECLINED' | 'REJECTED';
 
   @Index()
   @Column({ name: 'requester_member_id', type: 'uuid', nullable: true })

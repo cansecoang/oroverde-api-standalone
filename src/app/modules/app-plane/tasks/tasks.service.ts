@@ -1,4 +1,5 @@
 import { Injectable, Scope, NotFoundException, BadRequestException, ForbiddenException } from '@nestjs/common';
+import { EntityManager } from 'typeorm';
 import { TenantConnectionService } from '../../tenancy/tenant-connection.service';
 import { Task } from './entities/task.entity';
 import { ProductMember } from '../products/entities/product-member.entity';
@@ -15,6 +16,8 @@ const SUPER_ADMIN_SENTINEL_ID = '00000000-0000-0000-0000-000000000000';
 type TaskActorContext = {
   workspaceMemberId?: string;
   tenantRole?: string;
+  ipAddress?: string;
+  userAgent?: string;
 };
 
 @Injectable({ scope: Scope.REQUEST })
@@ -26,57 +29,39 @@ export class TasksService {
 
   async create(dto: CreateTaskDto, actor?: TaskActorContext) {
     const ds = await this.tenantConnection.getTenantConnection();
-    const repo = ds.getRepository(Task);
 
-    await this.normalizeTaskAssignment(
+    await this.normalizeTaskAssignment(ds, dto.productId, dto, {});
+
+    this.validateDateCoherence(dto.startDate, dto.endDate);
+
+    const task = ds.getRepository(Task).create(dto);
+
+    const saved = await this.withAuditLog<Task>(
       ds,
-      dto.productId,
-      dto,
-      {},
-    );
-
-    const task = repo.create(dto);
-    const saved = await repo.save(task);
-
-    const qr = ds.createQueryRunner();
-    await qr.connect();
-    await qr.startTransaction();
-    try {
-      const auditLog = qr.manager.create(AuditLog, {
+      (manager) => manager.save(Task, task) as Promise<Task>,
+      (result) => ({
         actorMemberId: actor?.workspaceMemberId ?? null,
         entity: 'task',
-        entityId: saved.id,
+        entityId: result.id,
         action: 'CREATE',
-        changes: { title: saved.title, productId: saved.productId },
-      });
-      await qr.manager.save(AuditLog, auditLog);
-      await qr.commitTransaction();
-    } catch {
-      await qr.rollbackTransaction();
-    } finally {
-      await qr.release();
-    }
+        changes: {
+          title: result.title,
+          productId: result.productId,
+          assigneeMemberId: result.assigneeMemberId ?? null,
+          phaseId: result.phaseId ?? null,
+          statusId: result.statusId ?? null,
+          startDate: result.startDate ?? null,
+          endDate: result.endDate ?? null,
+        },
+        ip_address: actor?.ipAddress ?? null,
+        user_agent: actor?.userAgent ?? null,
+      }),
+    );
 
-    const result = await this.findOneWithRelations(ds, saved.id);
+    const result = await this.findOneWithRelations(ds, saved.id).catch(() => saved);
 
-    // Best-effort: notify the assignee if one was set
     if (saved.assigneeMemberId) {
-      const pm = await ds.getRepository(ProductMember).findOne({
-        where: { id: saved.assigneeMemberId },
-        select: ['memberId'],
-      });
-      if (pm?.memberId) {
-        const product = await ds.getRepository(Product).findOne({ where: { id: saved.productId }, select: ['name'] });
-        const productName = product?.name ?? saved.productId;
-        void this.notifications.createNotification(
-          ds,
-          pm.memberId,
-          'TASK_ASSIGNED',
-          'Se te asignó una tarea',
-          `Se te asignó la tarea "${saved.title}" en el producto "${productName}".`,
-          { entityType: 'TASK', entityId: saved.id, metadata: { taskTitle: saved.title, productName, productId: saved.productId } },
-        );
-      }
+      void this.notifyTaskAssignee(ds, saved);
     }
 
     return result;
@@ -95,15 +80,13 @@ export class TasksService {
 
     const previousStatusId = task.statusId;
 
-    const queryRunner = ds.createQueryRunner();
-    await queryRunner.connect();
-    await queryRunner.startTransaction();
-
-    try {
-      task.statusId = dto.statusId;
-      await queryRunner.manager.save(Task, task);
-
-      const auditLog = queryRunner.manager.create(AuditLog, {
+    await this.withAuditLog<Task>(
+      ds,
+      (manager) => {
+        task.statusId = dto.statusId;
+        return manager.save(Task, task) as Promise<Task>;
+      },
+      () => ({
         actorMemberId: actor?.workspaceMemberId ?? null,
         entity: 'task',
         entityId: id,
@@ -112,16 +95,10 @@ export class TasksService {
           old: { statusId: previousStatusId },
           new: { statusId: dto.statusId },
         },
-      });
-      await queryRunner.manager.save(AuditLog, auditLog);
-
-      await queryRunner.commitTransaction();
-    } catch (err) {
-      await queryRunner.rollbackTransaction();
-      throw err;
-    } finally {
-      await queryRunner.release();
-    }
+        ip_address: actor?.ipAddress ?? null,
+        user_agent: actor?.userAgent ?? null,
+      }),
+    );
 
     return this.findOneWithRelations(ds, id);
   }
@@ -141,38 +118,39 @@ export class TasksService {
     // Prevent moving task to another product
     delete updateData['productId'];
 
-    await this.normalizeTaskAssignment(
+    await this.normalizeTaskAssignment(ds, task.productId, updateData, {
+      currentAssigneeMemberId: task.assigneeMemberId ?? null,
+      currentAssignedOrganizationId: task.assignedOrganizationId ?? null,
+    });
+
+    const effectiveStartDate = 'startDate' in updateData ? updateData.startDate : task.startDate;
+    const effectiveEndDate = 'endDate' in updateData ? updateData.endDate : task.endDate;
+    const effectiveActualStart = 'actualStartDate' in updateData ? updateData.actualStartDate : task.actualStartDate;
+    const effectiveActualEnd = 'actualEndDate' in updateData ? updateData.actualEndDate : task.actualEndDate;
+    this.validateDateCoherence(effectiveStartDate, effectiveEndDate, effectiveActualStart, effectiveActualEnd);
+
+    const oldSnapshot = {
+      title: task.title,
+      statusId: task.statusId,
+      assigneeMemberId: task.assigneeMemberId,
+    };
+
+    const saved = await this.withAuditLog<Task>(
       ds,
-      task.productId,
-      updateData,
-      {
-        currentAssigneeMemberId: task.assigneeMemberId ?? null,
-        currentAssignedOrganizationId: task.assignedOrganizationId ?? null,
+      (manager) => {
+        repo.merge(task, updateData);
+        return manager.save(Task, task) as Promise<Task>;
       },
-    );
-
-    const oldSnapshot = { title: task.title, statusId: task.statusId, assigneeMemberId: task.assigneeMemberId };
-    repo.merge(task, updateData);
-    const saved = await repo.save(task);
-
-    const qr = ds.createQueryRunner();
-    await qr.connect();
-    await qr.startTransaction();
-    try {
-      const auditLog = qr.manager.create(AuditLog, {
+      () => ({
         actorMemberId: actor?.workspaceMemberId ?? null,
         entity: 'task',
-        entityId: saved.id,
+        entityId: id,
         action: 'UPDATE',
         changes: { old: oldSnapshot, new: updateData },
-      });
-      await qr.manager.save(AuditLog, auditLog);
-      await qr.commitTransaction();
-    } catch {
-      await qr.rollbackTransaction();
-    } finally {
-      await qr.release();
-    }
+        ip_address: actor?.ipAddress ?? null,
+        user_agent: actor?.userAgent ?? null,
+      }),
+    );
 
     return this.findOneWithRelations(ds, saved.id);
   }
@@ -189,47 +167,68 @@ export class TasksService {
     }
 
     const snapshot = { title: task.title, productId: task.productId };
-    await repo.remove(task);
 
-    const qr = ds.createQueryRunner();
-    await qr.connect();
-    await qr.startTransaction();
-    try {
-      const auditLog = qr.manager.create(AuditLog, {
+    await this.withAuditLog<Task>(
+      ds,
+      (manager) => manager.remove(Task, task) as Promise<Task>,
+      () => ({
         actorMemberId: actor?.workspaceMemberId ?? null,
         entity: 'task',
         entityId: id,
         action: 'DELETE',
         changes: snapshot,
-      });
-      await qr.manager.save(AuditLog, auditLog);
-      await qr.commitTransaction();
-    } catch {
-      await qr.rollbackTransaction();
-    } finally {
-      await qr.release();
-    }
+        ip_address: actor?.ipAddress ?? null,
+        user_agent: actor?.userAgent ?? null,
+      }),
+    );
 
     return { deleted: true, id };
   }
 
   async findByProject(productId: string, page = 1, limit = 50) {
     const ds = await this.tenantConnection.getTenantConnection();
-    const [data, total] = await ds.getRepository(Task).findAndCount({
-      where: { productId },
-      relations: ['status', 'phase', 'assignee', 'assignee.member', 'assignedOrganization'],
-      order: { createdAt: 'DESC' },
-      skip: (page - 1) * limit,
-      take: limit,
-    });
+
+    // Use limit/offset (direct SQL) instead of take/skip to avoid TypeORM's DISTINCT
+    // subquery optimization, which generates "distinctAlias.Product_id" — a capitalized
+    // alias that PostgreSQL rejects because the real column is "product_id".
+    const total = await ds.getRepository(Task)
+      .createQueryBuilder('task')
+      .where('task.productId = :productId', { productId })
+      .getCount();
+
+    const data = await ds.getRepository(Task)
+      .createQueryBuilder('task')
+      .leftJoinAndSelect('task.status', 'status')
+      .leftJoinAndSelect('task.phase', 'phase')
+      .leftJoinAndSelect('task.assignee', 'assignee')
+      .leftJoinAndSelect('assignee.member', 'assigneeMember')
+      .leftJoinAndSelect('task.assignedOrganization', 'assignedOrganization')
+      .where('task.productId = :productId', { productId })
+      .orderBy('task.createdAt', 'DESC')
+      .limit(limit)
+      .offset((page - 1) * limit)
+      .getMany();
+
     return { data, total, page, limit };
   }
 
   private async findOneWithRelations(ds: any, id: string) {
-    const task = await ds.getRepository(Task).findOne({
-      where: { id },
-      relations: ['status', 'phase', 'assignee', 'assignee.member', 'assignedOrganization'],
-    });
+    // Use getMany() (no take/skip) to avoid TypeORM's DISTINCT subquery optimization.
+    // getOne() internally sets take=1 which triggers executeEntitiesAndRawResults to wrap
+    // the query in a "SELECT DISTINCT ... distinctAlias" subquery. TypeORM then generates
+    // the alias "Product_id" (entity class name + "_id") for ProductMember's product FK,
+    // but PostgreSQL expects "product_id" → error 42703.
+    const results = await ds.getRepository(Task)
+      .createQueryBuilder('task')
+      .leftJoinAndSelect('task.status', 'status')
+      .leftJoinAndSelect('task.phase', 'phase')
+      .leftJoinAndSelect('task.assignee', 'assignee')
+      .leftJoinAndSelect('assignee.member', 'assigneeMember')
+      .leftJoinAndSelect('task.assignedOrganization', 'assignedOrganization')
+      .where('task.id = :id', { id })
+      .getMany();
+
+    const task = results[0];
     if (!task) {
       throw new NotFoundException('Tarea no encontrada');
     }
@@ -361,5 +360,106 @@ export class TasksService {
     if (actor.workspaceMemberId === SUPER_ADMIN_SENTINEL_ID) return false;
     if (actor.tenantRole === TenantRole.GENERAL_COORDINATOR) return false;
     return true;
+  }
+
+  private async notifyTaskAssignee(ds: any, task: Task): Promise<void> {
+    try {
+      const pm = await ds.getRepository(ProductMember).findOne({
+        where: { id: task.assigneeMemberId },
+        select: ['memberId'],
+      });
+
+      if (!pm?.memberId) {
+        return;
+      }
+
+      const productName = await this.resolveProductName(ds, task.productId);
+
+      await this.notifications.createNotification(
+        ds,
+        pm.memberId,
+        'TASK_ASSIGNED',
+        'Se te asignó una tarea',
+        `Se te asignó la tarea "${task.title}" en el producto "${productName}".`,
+        {
+          entityType: 'TASK',
+          entityId: task.id,
+          metadata: { taskTitle: task.title, productName, productId: task.productId },
+        },
+      );
+    } catch {
+      // Best-effort notification: ignore failures to preserve primary mutation flow.
+    }
+  }
+
+  private async resolveProductName(ds: any, productId: string): Promise<string> {
+    try {
+      const row = await ds.getRepository(Product)
+        .createQueryBuilder('product')
+        .select('product.name', 'name')
+        .where('product.id = :productId', { productId })
+        .limit(1)
+        .getRawOne() as { name?: string } | undefined;
+
+      return row?.name ?? productId;
+    } catch {
+      return productId;
+    }
+  }
+
+  private async withAuditLog<T>(
+    ds: any,
+    operation: (manager: EntityManager) => Promise<T>,
+    buildAudit: (result: T) => {
+      actorMemberId: string | null;
+      entity: string;
+      entityId: string;
+      action: string;
+      changes: Record<string, any>;
+      ip_address?: string | null;
+      user_agent?: string | null;
+    },
+  ): Promise<T> {
+    const qr = ds.createQueryRunner();
+    await qr.connect();
+    await qr.startTransaction();
+    try {
+      const result = await operation(qr.manager);
+      await qr.manager.save(AuditLog, qr.manager.create(AuditLog, buildAudit(result)));
+      await qr.commitTransaction();
+      return result;
+    } catch (err) {
+      await qr.rollbackTransaction();
+      throw err;
+    } finally {
+      await qr.release();
+    }
+  }
+
+  private validateDateCoherence(
+    startDate?: Date | string | null,
+    endDate?: Date | string | null,
+    actualStartDate?: Date | string | null,
+    actualEndDate?: Date | string | null,
+  ): void {
+    const toMs = (v: Date | string | null | undefined): number | null =>
+      v ? new Date(v).getTime() : null;
+
+    const sd = toMs(startDate);
+    const ed = toMs(endDate);
+    const asd = toMs(actualStartDate);
+    const aed = toMs(actualEndDate);
+
+    if (sd !== null && ed !== null && sd > ed) {
+      throw new BadRequestException(
+        'La fecha de fin planificada no puede ser anterior a la fecha de inicio planificada.',
+      );
+    }
+
+    if (asd !== null && aed !== null && asd > aed) {
+      throw new BadRequestException(
+        'La fecha de fin real no puede ser anterior a la fecha de inicio real.',
+      );
+    }
   }
 }

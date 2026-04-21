@@ -1,4 +1,4 @@
-import { Controller, Get, Post, Body, Put, Param, Delete, Query, UseGuards } from '@nestjs/common';
+import { Controller, Get, Post, Body, Put, Param, Delete, Query, UseGuards, Request } from '@nestjs/common';
 import { ApiTags, ApiCookieAuth, ApiOperation, ApiResponse, ApiQuery, ApiParam } from '@nestjs/swagger';
 import { GlobalOrganizationsService } from './global-organizations.service';
 import { CreateGlobalOrganizationDto } from './dto/create-global-organization.dto';
@@ -22,8 +22,8 @@ export class GlobalOrganizationsController {
   @ApiResponse({ status: 400, description: 'Datos inválidos' })
   @ApiResponse({ status: 401, description: 'No autenticado' })
   @ApiResponse({ status: 403, description: 'No autorizado' })
-  create(@Body() createDto: CreateGlobalOrganizationDto) {
-    return this.service.create(createDto);
+  create(@Body() createDto: CreateGlobalOrganizationDto, @Request() req) {
+    return this.service.create(createDto, req.user?.id);
   }
 
   @Get()
@@ -57,12 +57,12 @@ export class GlobalOrganizationsController {
   @ApiOperation({ summary: 'Actualizar organización (reemplazar parcialmente)' })
   @ApiParam({ name: 'id', type: String, description: 'UUID de la organización' })
   @ApiResponse({ status: 200, description: 'Organización actualizada' })
-  @ApiResponse({ status: 400, description: 'Datos inválidos o colisión de name/tax_id' })
+  @ApiResponse({ status: 400, description: 'Datos inválidos o colisión de name' })
   @ApiResponse({ status: 401, description: 'No autenticado' })
   @ApiResponse({ status: 403, description: 'No autorizado' })
   @ApiResponse({ status: 404, description: 'Organización no encontrada' })
-  update(@Param('id') id: string, @Body() updateDto: UpdateGlobalOrganizationDto) {
-    return this.service.update(id, updateDto);
+  update(@Param('id') id: string, @Body() updateDto: UpdateGlobalOrganizationDto, @Request() req) {
+    return this.service.update(id, updateDto, req.user?.id);
   }
 
   @Delete(':id')
@@ -76,7 +76,7 @@ export class GlobalOrganizationsController {
     status: 409,
     description: 'Conflicto: Organización tiene usuarios asociados',
   })
-  remove(@Param('id') id: string) {
-    return this.service.remove(id);
+  remove(@Param('id') id: string, @Request() req) {
+    return this.service.remove(id, req.user?.id);
   }
 }

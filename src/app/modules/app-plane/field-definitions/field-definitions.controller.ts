@@ -4,22 +4,20 @@ import { FieldDefinitionsService } from './field-definitions.service';
 import { CreateFieldDefinitionDto } from './dto/create-field-definition.dto';
 import { UpdateFieldDefinitionDto } from './dto/update-field-definition.dto';
 import { ReorderFieldDefinitionsDto } from './dto/reorder-field-definitions.dto';
-
 import { AuthenticatedGuard } from '../../../common/guards/authenticated.guard';
 import { TenantAccessGuard } from '../../../common/guards/tenant-access.guard';
-import { HybridPermissionsGuard } from '../../../common/guards/hybrid-permissions.guard';
-import { RequirePermission } from '../../../common/decorators/require-permission.decorator';
-import { Permission } from '../../../common/enums/business-roles.enum';
+import { PoliciesGuard } from '../../../common/guards/policies.guard';
+import { CheckPolicies } from '../../../common/decorators/check-policies.decorator';
 
 @ApiTags('Field Definitions')
 @ApiCookieAuth()
 @Controller('field-definitions')
-@UseGuards(AuthenticatedGuard, TenantAccessGuard, HybridPermissionsGuard)
+@UseGuards(AuthenticatedGuard, TenantAccessGuard, PoliciesGuard)
 export class FieldDefinitionsController {
   constructor(private readonly service: FieldDefinitionsService) {}
 
   @Post()
-  @RequirePermission(Permission.FIELD_DEF_WRITE)
+  @CheckPolicies((ability) => ability.can('write', 'FieldDefinition'))
   @ApiOperation({ summary: 'Crear definición de campo' })
   @ApiResponse({ status: 201, description: 'Definición de campo creada exitosamente' })
   @ApiResponse({ status: 400, description: 'Datos inválidos' })
@@ -29,7 +27,7 @@ export class FieldDefinitionsController {
   }
 
   @Get()
-  @RequirePermission(Permission.FIELD_DEF_READ)
+  @CheckPolicies((ability) => ability.can('read', 'FieldDefinition'))
   @ApiOperation({ summary: 'Obtener template de campos' })
   @ApiResponse({ status: 200, description: 'Template de campos' })
   @ApiResponse({ status: 401, description: 'No autenticado' })
@@ -38,7 +36,7 @@ export class FieldDefinitionsController {
   }
 
   @Patch('reorder')
-  @RequirePermission(Permission.FIELD_DEF_WRITE)
+  @CheckPolicies((ability) => ability.can('write', 'FieldDefinition'))
   @ApiOperation({ summary: 'Reordenar definiciones de campo' })
   @ApiResponse({ status: 200, description: 'Campos reordenados, devuelve la lista actualizada' })
   @ApiResponse({ status: 400, description: 'IDs inválidos' })
@@ -47,7 +45,7 @@ export class FieldDefinitionsController {
   }
 
   @Patch(':id')
-  @RequirePermission(Permission.FIELD_DEF_WRITE)
+  @CheckPolicies((ability) => ability.can('write', 'FieldDefinition'))
   @ApiOperation({ summary: 'Actualizar definición de campo' })
   @ApiResponse({ status: 200, description: 'Campo actualizado' })
   @ApiResponse({ status: 404, description: 'Campo no encontrado' })
@@ -59,7 +57,7 @@ export class FieldDefinitionsController {
   }
 
   @Delete(':id')
-  @RequirePermission(Permission.FIELD_DEF_WRITE)
+  @CheckPolicies((ability) => ability.can('write', 'FieldDefinition'))
   @ApiOperation({ summary: 'Eliminar definición de campo' })
   @ApiResponse({ status: 200, description: 'Campo eliminado' })
   @ApiResponse({ status: 404, description: 'Campo no encontrado' })

@@ -9,6 +9,7 @@ import { GlobalUsersService } from '../control-plane/users/users.service';
 import { TenantMember } from '../control-plane/tenants/entities/tenant-member.entity';
 import { Tenant } from '../control-plane/tenants/entities/tenant.entity';
 import { TenantStatus } from '../../common/enums/tenant-status.enum';
+import { SessionService } from '../../common/services/session.service';
 
 @Injectable()
 export class AuthService {
@@ -29,6 +30,9 @@ export class AuthService {
 
     // 4. Mailer for password reset emails
     private readonly mailerService: MailerService,
+
+    // 5. DT-005: Session invalidation on password change
+    private readonly sessionService: SessionService,
 
   ) {}
 
@@ -93,6 +97,10 @@ export class AuthService {
     user.password_hash = await bcrypt.hash(newPassword, salt);
     user.mustChangePassword = false;
     await this.usersRepository.save(user);
+
+    // DT-005: Invalidate all active sessions for this user after password change.
+    // Best-effort — never fails the request if Redis is unavailable.
+    await this.sessionService.purgeUserSessions(userId).catch(() => {});
 
     return { message: 'Password updated successfully' };
   }

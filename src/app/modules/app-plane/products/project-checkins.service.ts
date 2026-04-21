@@ -51,28 +51,55 @@ export class ProjectCheckInsService {
       order: { scheduled_at: 'ASC' },
     });
 
-    const [past, pastTotal] = await repo
+    const safePastPage = Number.isFinite(pastPage) && pastPage > 0 ? pastPage : 1;
+    const safePastLimit = Number.isFinite(pastLimit) && pastLimit > 0 ? Math.min(pastLimit, 100) : 10;
+
+    const basePastQb = repo
       .createQueryBuilder('ci')
-      .leftJoinAndSelect('ci.organizer', 'organizer')
-      .leftJoinAndSelect('organizer.member', 'organizerMember')
-      .leftJoinAndSelect('ci.attendees', 'attendees')
-      .leftJoinAndSelect('attendees.member', 'attendeeMember')
-      .leftJoinAndSelect('ci.linkedTasks', 'linkedTasks')
-      .leftJoinAndSelect('linkedTasks.status', 'taskStatus')
       .where('ci.product_id = :productId', { productId })
-      .andWhere('(ci.is_completed = true OR ci.scheduled_at < :now)', { now })
+      .andWhere('(ci.is_completed = true OR ci.scheduled_at < :now)', { now });
+
+    const pastTotal = await basePastQb.clone().getCount();
+
+    const pastIdRows: Array<{ id: string }> = await basePastQb
+      .clone()
+      .select('ci.id', 'id')
       .orderBy('ci.scheduled_at', 'DESC')
-      .skip((pastPage - 1) * pastLimit)
-      .take(pastLimit)
-      .getManyAndCount();
+      .addOrderBy('ci.id', 'DESC')
+      .limit(safePastLimit)
+      .offset((safePastPage - 1) * safePastLimit)
+      .getRawMany();
+
+    const pastIds = pastIdRows.map((row) => row.id);
+    let past: ProjectCheckIn[] = [];
+
+    if (pastIds.length) {
+      past = await repo
+        .createQueryBuilder('ci')
+        .leftJoinAndSelect('ci.organizer', 'organizer')
+        .leftJoinAndSelect('organizer.member', 'organizerMember')
+        .leftJoinAndSelect('ci.attendees', 'attendees')
+        .leftJoinAndSelect('attendees.member', 'attendeeMember')
+        .leftJoinAndSelect('ci.linkedTasks', 'linkedTasks')
+        .leftJoinAndSelect('linkedTasks.status', 'taskStatus')
+        .where('ci.id IN (:...ids)', { ids: pastIds })
+        .getMany();
+
+      const orderMap = new Map(pastIds.map((id, index) => [id, index]));
+      past.sort(
+        (a, b) =>
+          (orderMap.get(a.id) ?? Number.MAX_SAFE_INTEGER) -
+          (orderMap.get(b.id) ?? Number.MAX_SAFE_INTEGER),
+      );
+    }
 
     return {
       nextCheckin: upcoming[0] ?? null,
       upcoming,
       past,
       pastTotal,
-      pastPage,
-      pastLimit,
+      pastPage: safePastPage,
+      pastLimit: safePastLimit,
     };
   }
 
@@ -138,17 +165,8 @@ export class ProjectCheckInsService {
       await qr.release();
     }
 
-    // Best-effort: notify all product members about the scheduled check-in
-    const product = await ds.getRepository(Product).findOne({ where: { id: dto.productId }, select: ['name'] });
-    const productName = product?.name ?? dto.productId;
-    void this.notifications.notifyProductMembers(
-      ds,
-      dto.productId,
-      'CHECKIN_SCHEDULED',
-      'Check-in programado',
-      `Se programó un check-in "${dto.title}" para el producto "${productName}".`,
-      { entityType: 'CHECK_IN', entityId: saved.id, metadata: { checkInTitle: dto.title, productName, productId: dto.productId, scheduledAt: dto.scheduled_at } },
-    );
+    // Best-effort: notification failures must never break check-in scheduling.
+    void this.notifyCheckinScheduled(ds, saved.id, dto.productId, dto.title, dto.scheduled_at);
 
     return this.findOne(saved.id);
   }
@@ -362,5 +380,46 @@ export class ProjectCheckInsService {
     if (actor.workspaceMemberId === SUPER_ADMIN_SENTINEL_ID) return false;
     if (actor.tenantRole === TenantRole.GENERAL_COORDINATOR) return false;
     return true;
+  }
+
+  private async notifyCheckinScheduled(
+    ds: any,
+    checkInId: string,
+    productId: string,
+    title: string,
+    scheduledAt: unknown,
+  ): Promise<void> {
+    try {
+      const productName = await this.resolveProductName(ds, productId);
+      await this.notifications.notifyProductMembers(
+        ds,
+        productId,
+        'CHECKIN_SCHEDULED',
+        'Check-in programado',
+        `Se programó un check-in "${title}" para el producto "${productName}".`,
+        {
+          entityType: 'CHECK_IN',
+          entityId: checkInId,
+          metadata: { checkInTitle: title, productName, productId, scheduledAt },
+        },
+      );
+    } catch {
+      // Best-effort notification: ignore failures to preserve primary mutation flow.
+    }
+  }
+
+  private async resolveProductName(ds: any, productId: string): Promise<string> {
+    try {
+      const row = await ds.getRepository(Product)
+        .createQueryBuilder('product')
+        .select('product.name', 'name')
+        .where('product.id = :productId', { productId })
+        .limit(1)
+        .getRawOne() as { name?: string } | undefined;
+
+      return row?.name ?? productId;
+    } catch {
+      return productId;
+    }
   }
 }

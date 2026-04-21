@@ -118,7 +118,10 @@ export const ProductACL: Record<ProductRole, Permission[]> = {
   [ProductRole.DEVELOPER_WORKER]: [
     Permission.PRODUCT_READ,
     Permission.PRODUCT_MEMBER_READ,
+    // Tareas — developer puede crear, editar y cambiar estado
+    Permission.TASK_WRITE,
     Permission.TASK_READ,
+    Permission.TASK_UPDATE,
     Permission.TASK_UPDATE_STATUS,
     Permission.STRATEGY_READ,
     Permission.CHECKIN_READ,
