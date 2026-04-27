@@ -20,9 +20,6 @@ export class Product {
   objective: string; // "Product Objective"
 
   @Column({ type: 'text', nullable: true })
-  description: string; // Resumen general
-
-  @Column({ type: 'text', nullable: true })
   methodology: string; // "Methodology Description"
 
   @Column({ nullable: true })

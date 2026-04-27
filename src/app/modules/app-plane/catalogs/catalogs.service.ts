@@ -69,7 +69,7 @@ export class CatalogsService {
   }
 
   // --- CREAR (Transacción) ---
-  async createCatalogWithItems(data: { name: string; code?: string; items: string[] }) {
+  async createCatalogWithItems(data: { name: string; code?: string; items?: string[] }) {
     const dataSource = await this.tenantConnection.getTenantConnection();
     
     const queryRunner = dataSource.createQueryRunner();
@@ -100,7 +100,7 @@ export class CatalogsService {
 
       // Crear Items con código autogenerado y único dentro del catálogo
       const itemsToSave: CatalogItem[] = [];
-      for (const itemName of data.items) {
+      for (const itemName of (data.items ?? [])) {
         const baseItemCode = CatalogsService.generateCode(itemName);
         const itemCode = await this.ensureUniqueItemCode(
           queryRunner.manager,
@@ -160,6 +160,64 @@ export class CatalogsService {
     }
 
     return catalog;
+  }
+
+  // --- AGREGAR ITEM ---
+  async addItem(catalogId: string, name: string) {
+    const dataSource = await this.tenantConnection.getTenantConnection();
+    const manager = dataSource.manager;
+
+    const catalog = await manager.findOne(Catalog, { where: { id: catalogId, isSystem: false } });
+    if (!catalog) throw new NotFoundException('Catálogo no encontrado.');
+
+    const baseCode = CatalogsService.generateCode(name);
+    const code = await this.ensureUniqueItemCode(manager, catalogId, baseCode);
+
+    const maxOrder = await manager
+      .createQueryBuilder(CatalogItem, 'i')
+      .select('MAX(i.order)', 'max')
+      .where('i.catalog_id = :catalogId', { catalogId })
+      .getRawOne<{ max: number | null }>();
+
+    const item = manager.create(CatalogItem, {
+      name,
+      code,
+      catalogId,
+      order: (maxOrder?.max ?? 0) + 1,
+    });
+    return manager.save(item);
+  }
+
+  // --- ACTUALIZAR ITEM ---
+  async updateItem(itemId: string, name: string) {
+    const dataSource = await this.tenantConnection.getTenantConnection();
+    const manager = dataSource.manager;
+
+    const item = await manager.findOne(CatalogItem, {
+      where: { id: itemId },
+      relations: ['catalog'],
+    });
+    if (!item) throw new NotFoundException('Ítem no encontrado.');
+    if (item.catalog?.isSystem) throw new BadRequestException('No se puede editar un catálogo de sistema.');
+
+    item.name = name;
+    return manager.save(item);
+  }
+
+  // --- ELIMINAR ITEM ---
+  async deleteItem(itemId: string) {
+    const dataSource = await this.tenantConnection.getTenantConnection();
+    const manager = dataSource.manager;
+
+    const item = await manager.findOne(CatalogItem, {
+      where: { id: itemId },
+      relations: ['catalog'],
+    });
+    if (!item) throw new NotFoundException('Ítem no encontrado.');
+    if (item.catalog?.isSystem) throw new BadRequestException('No se puede eliminar un ítem de catálogo de sistema.');
+
+    await manager.remove(item);
+    return { msg: 'Ítem eliminado.' };
   }
 
   async getItemsByType(type: string) {

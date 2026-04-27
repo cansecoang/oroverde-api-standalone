@@ -154,7 +154,6 @@ export class ProductsService {
         entityId: savedProduct.id,
         changes: {
           name: savedProduct.name,
-          description: savedProduct.description,
           customValues: customValues ?? [],
           customOrgFields: customOrgFields ?? [],
         }
@@ -254,7 +253,6 @@ export class ProductsService {
         .andWhere(
           `(
             product.name ILIKE :search
-            OR product.description ILIKE :search
             OR searchOwnerOrg.name ILIKE :search
             OR searchCountry.name ILIKE :search
             OR product.delivery_date::text ILIKE :search

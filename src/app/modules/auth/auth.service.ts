@@ -1,4 +1,4 @@
-import { Injectable, BadRequestException } from '@nestjs/common';
+import { Injectable, BadRequestException, NotFoundException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import * as bcrypt from 'bcrypt';
@@ -63,19 +63,23 @@ export class AuthService {
   }
 
   // 3. VALIDACIÓN...
-  async validateUser(email: string, pass: string): Promise<any> {
+  async validateUser(
+    email: string,
+    pass: string,
+  ): Promise<{ user: any; reason: 'ok' | 'not_found' | 'wrong_password' }> {
     const user = await this.usersService.findByEmail(email);
+
     if (!user || !user.password_hash) {
-      return null;
+      return { user: null, reason: 'not_found' };
     }
 
     const isPasswordValid = await bcrypt.compare(pass, user.password_hash);
     if (!isPasswordValid) {
-      return null;
+      return { user: null, reason: 'wrong_password' };
     }
 
     const { password_hash, ...result } = user;
-    return result;
+    return { user: result, reason: 'ok' };
   }
 
   // Cambio de contraseña (obligatorio en primer login)
@@ -114,36 +118,36 @@ export class AuthService {
   async forgotPassword(email: string): Promise<{ message: string }> {
     const user = await this.usersRepository.findOne({ where: { email } });
 
-    if (user) {
-      // Generate 6-digit code
-      const code = Math.floor(100000 + Math.random() * 900000).toString();
-      const hashedCode = await bcrypt.hash(code, 10);
-
-      user.resetCode = hashedCode;
-      user.resetCodeExpiry = new Date(Date.now() + 15 * 60 * 1000); // 15 minutes
-      user.resetToken = null;
-      user.resetTokenExpiry = null;
-      await this.usersRepository.save(user);
-
-      // Send email
-      await this.mailerService.sendMail({
-        to: user.email,
-        subject: 'OroVerde — Password Reset Code',
-        html: `
-          <div style="font-family: 'Satoshi', system-ui, sans-serif; max-width: 480px; margin: 0 auto; padding: 32px 24px; background: #ffffff;">
-            <h1 style="font-size: 22px; font-weight: 700; color: #0b1623; margin: 0 0 8px;">Password Reset</h1>
-            <p style="font-size: 15px; color: #64748b; margin: 0 0 24px;">Hi ${user.firstName}, use the code below to reset your password. It expires in 15 minutes.</p>
-            <div style="background: #f8fafc; border-radius: 12px; padding: 24px; text-align: center; margin: 0 0 24px;">
-              <span style="font-size: 36px; font-weight: 700; letter-spacing: 8px; color: #0b1623;">${code}</span>
-            </div>
-            <p style="color: #94a3b8; font-size: 13px; margin: 0;">If you didn't request a password reset, you can safely ignore this email.</p>
-          </div>
-        `,
-      });
+    if (!user) {
+      throw new NotFoundException('No encontramos una cuenta con ese correo electrónico.');
     }
 
-    // Always return success to prevent user enumeration
-    return { message: 'If that email is registered, a reset code has been sent.' };
+    // Generate 6-digit code
+    const code = Math.floor(100000 + Math.random() * 900000).toString();
+    const hashedCode = await bcrypt.hash(code, 10);
+
+    user.resetCode = hashedCode;
+    user.resetCodeExpiry = new Date(Date.now() + 15 * 60 * 1000); // 15 minutes
+    user.resetToken = null;
+    user.resetTokenExpiry = null;
+    await this.usersRepository.save(user);
+
+    await this.mailerService.sendMail({
+      to: user.email,
+      subject: 'OroVerde — Password Reset Code',
+      html: `
+        <div style="font-family: 'Satoshi', system-ui, sans-serif; max-width: 480px; margin: 0 auto; padding: 32px 24px; background: #ffffff;">
+          <h1 style="font-size: 22px; font-weight: 700; color: #0b1623; margin: 0 0 8px;">Password Reset</h1>
+          <p style="font-size: 15px; color: #64748b; margin: 0 0 24px;">Hi ${user.firstName}, use the code below to reset your password. It expires in 15 minutes.</p>
+          <div style="background: #f8fafc; border-radius: 12px; padding: 24px; text-align: center; margin: 0 0 24px;">
+            <span style="font-size: 36px; font-weight: 700; letter-spacing: 8px; color: #0b1623;">${code}</span>
+          </div>
+          <p style="color: #94a3b8; font-size: 13px; margin: 0;">If you didn't request a password reset, you can safely ignore this email.</p>
+        </div>
+      `,
+    });
+
+    return { message: 'Se ha enviado un código de verificación a tu correo.' };
   }
 
   /**

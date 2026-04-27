@@ -15,11 +15,6 @@ export class CreateProductDto {
   @IsOptional()
   objective?: string;
 
-  @ApiPropertyOptional({ description: 'Descripción del proyecto', example: 'Reforestación de 500 hectáreas' })
-  @IsString()
-  @IsOptional()
-  description?: string;
-
   @ApiPropertyOptional({ description: 'Metodología del proyecto' })
   @IsString()
   @IsOptional()

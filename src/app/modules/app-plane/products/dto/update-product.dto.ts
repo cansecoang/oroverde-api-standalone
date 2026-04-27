@@ -23,11 +23,6 @@ export class UpdateProductDto {
   @IsOptional()
   objective?: string;
 
-  @ApiPropertyOptional({ description: 'Descripción del proyecto' })
-  @IsString()
-  @IsOptional()
-  description?: string;
-
   @ApiPropertyOptional({ description: 'Metodología del proyecto' })
   @IsString()
   @IsOptional()

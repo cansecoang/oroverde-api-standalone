@@ -10,10 +10,14 @@ export class LocalStrategy extends PassportStrategy(Strategy) {
   }
 
   async validate(email: string, pass: string): Promise<any> {
-    const user = await this.authService.validateUser(email, pass); 
-  
-    if (!user) {
-      throw new UnauthorizedException('Invalid credentials');
+    const { user, reason } = await this.authService.validateUser(email, pass);
+
+    if (reason === 'not_found') {
+      throw new UnauthorizedException('No encontramos una cuenta con ese correo electrónico.');
+    }
+
+    if (reason === 'wrong_password') {
+      throw new UnauthorizedException('La contraseña es incorrecta.');
     }
 
     if (!user.isActive) {

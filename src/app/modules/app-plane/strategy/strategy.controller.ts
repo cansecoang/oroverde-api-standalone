@@ -1,4 +1,4 @@
-import { Controller, Post, Get, Patch, Body, Param, Query, UseGuards, ParseUUIDPipe } from '@nestjs/common';
+import { Controller, Post, Get, Patch, Delete, Body, Param, Query, UseGuards, ParseUUIDPipe } from '@nestjs/common';
 import { ApiTags, ApiCookieAuth, ApiOperation, ApiResponse, ApiParam } from '@nestjs/swagger';
 import { subject } from '@casl/ability';
 import { StrategyService } from './strategy.service';
@@ -106,6 +106,22 @@ export class StrategyController {
     @Body() dto: UpdateStrategyTargetDto,
   ) {
     return this.service.updateCommittedTarget(productId, assignmentId, dto.target);
+  }
+
+  @Delete('project/:productId/assignments/:assignmentId')
+  @CheckPolicies((ability, req) =>
+    ability.can('write', subject('Strategy', { productId: req.params.productId }))
+  )
+  @ApiOperation({ summary: 'Eliminar asignación de indicador a producto' })
+  @ApiParam({ name: 'productId', type: String })
+  @ApiParam({ name: 'assignmentId', type: String })
+  @ApiResponse({ status: 200, description: 'Asignación eliminada' })
+  @ApiResponse({ status: 404, description: 'Asignación no encontrada' })
+  removeAssignment(
+    @Param('productId', ParseUUIDPipe) productId: string,
+    @Param('assignmentId', ParseUUIDPipe) assignmentId: string,
+  ) {
+    return this.service.removeAssignment(productId, assignmentId);
   }
 
   @Get('tree')

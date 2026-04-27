@@ -1,4 +1,4 @@
-import { IsString, IsNotEmpty, IsOptional, IsInt, Min } from 'class-validator';
+import { IsString, IsNotEmpty, IsOptional } from 'class-validator';
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 
 export class CreateOutputDto {
@@ -11,9 +11,4 @@ export class CreateOutputDto {
   @IsString()
   @IsOptional()
   description?: string;
-
-  @ApiProperty({ description: 'Orden de visualización (entero >= 1)', example: 1, minimum: 1 })
-  @IsInt({ message: 'El orden debe ser un número entero' })
-  @Min(1, { message: 'El orden debe ser mayor a 0' })
-  order: number;
 }

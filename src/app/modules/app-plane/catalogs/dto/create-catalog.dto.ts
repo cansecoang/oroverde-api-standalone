@@ -1,4 +1,4 @@
-import { IsString, IsNotEmpty, IsArray, ArrayMinSize, MaxLength, IsOptional } from 'class-validator';
+import { IsString, IsNotEmpty, IsArray, MaxLength, IsOptional } from 'class-validator';
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 
 export class CreateCatalogDto {
@@ -14,9 +14,9 @@ export class CreateCatalogDto {
   @MaxLength(50)
   code?: string;
 
-  @ApiProperty({ description: 'Lista de items del catálogo', example: ['Planificación', 'Ejecución', 'Cierre'], type: [String], minItems: 1 })
+  @ApiPropertyOptional({ description: 'Lista de items iniciales del catálogo', example: ['Planificación', 'Ejecución'], type: [String] })
+  @IsOptional()
   @IsArray()
-  @ArrayMinSize(1, { message: 'Debe incluir al menos un item' })
   @IsString({ each: true })
-  items: string[];
+  items?: string[];
 }

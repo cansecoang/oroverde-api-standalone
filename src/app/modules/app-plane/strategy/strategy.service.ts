@@ -91,24 +91,22 @@ interface ProductTaskProgress {
 export class StrategyService {
   constructor(private tenantConnection: TenantConnectionService) {}
 
-  // 1. CREAR OUTPUT (Asegurando el Orden)
+  // 1. CREAR OUTPUT (Orden auto-incremental)
   async createOutput(dto: CreateOutputDto) {
     const dataSource = await this.tenantConnection.getTenantConnection();
     const repo = dataSource.getRepository(StrategicOutput);
 
-    // Validación: ¿Ya existe un Output con ese número de orden?
-    // Ej: Ya existe el Output 1, no puedes crear otro Output 1.
-    const existing = await repo.findOne({ where: { order: dto.order } });
-    if (existing) {
-        throw new BadRequestException(`Ya existe un Output con el número de orden ${dto.order}.`);
-    }
+    // Calculamos el próximo orden: COUNT(*) + 1
+    const count = await repo.count();
+    const order = count + 1;
 
     // Generamos el código visual automáticamente: "Output 1", "Output 2"
-    const code = `Output ${dto.order}`; 
+    const code = `Output ${order}`;
 
     const output = repo.create({
         ...dto,
-        code: code // Guardamos "Output 1"
+        order,
+        code,
     });
     return repo.save(output);
   }
@@ -154,14 +152,6 @@ export class StrategyService {
     const output = await repo.findOne({ where: { id } });
     if (!output) throw new NotFoundException('Output no encontrado.');
 
-    if (dto.order !== undefined && dto.order !== output.order) {
-      const conflict = await repo.findOne({ where: { order: dto.order } });
-      if (conflict && conflict.id !== id) {
-        throw new BadRequestException(`Ya existe un Output con el orden ${dto.order}.`);
-      }
-      output.code = `Output ${dto.order}`;
-      output.order = dto.order;
-    }
     if (dto.name !== undefined) output.name = dto.name;
     if (dto.description !== undefined) output.description = dto.description;
     return repo.save(output);
@@ -202,6 +192,15 @@ export class StrategyService {
       committed_target: dto.target
     });
     return repo.save(assignment);
+  }
+
+  async removeAssignment(productId: string, assignmentId: string) {
+    const dataSource = await this.tenantConnection.getTenantConnection();
+    const repo = dataSource.getRepository(ProductStrategy);
+    const assignment = await repo.findOne({ where: { id: assignmentId, productId } });
+    if (!assignment) throw new NotFoundException('La asignación producto-indicador no fue encontrada.');
+    await repo.remove(assignment);
+    return { removed: true };
   }
 
   async updateCommittedTarget(productId: string, assignmentId: string, target: number) {
